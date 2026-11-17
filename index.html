@@ -1600,6 +1600,7 @@ function viewDirectory(){
     <p class="sub" style="margin-top:-10px">${people.length} team members</p>
     ${people.length ? `<div class="roster four">${people.map(p => starTile(tile(p, "", "member", p.id), p)).join("")}${isEditor() && !S.addPerson ? addTile() : ""}</div>` : isEditor() && !S.addPerson ? `<div class="roster four">${addTile()}</div>` : `<div class="empty">No one is in the Roster yet.</div>`}
     ${waitingPanel()}
+    ${needsEmailPanel()}
     ${nonActiveSection()}
     ${archivedSection()}`;
 }
@@ -2430,16 +2431,14 @@ function managePanel(p){
 function nonActiveSection(){
   if (!isEditor()) return "";
   const list = S.items.filter(p => isProfile(p) && !p.gone && lc(p.active || "") === "non active").sort((a, b) => (a.fullName || "").localeCompare(b.fullName || ""));
-  if (!list.length) return "";
   const t = p => tile(p, "", "member", p.id);
-  return `<details class="archived-sec"><summary class="section-label">Non Active <span class="count">${list.length}</span></summary>
+  return `<details class="archived-sec"><summary class="section-label">Not Active <span class="count">${list.length}</span></summary>
     <p class="sub" style="margin:0 0 8px">Only admins see this. These people are hidden from the Team Directory. Open someone to set them back to Active.</p>
     <div class="roster four archived-roster">${list.map(t).join("")}</div></details>`;
 }
 function archivedSection(){
   if (!isEditor()) return "";
   const list = S.items.filter(p => isProfile(p) && p.gone).sort((a, b) => (a.fullName || "").localeCompare(b.fullName || ""));
-  if (!list.length) return "";
   const t = p => tile(p, "", "member", p.id);
   return `<details class="archived-sec"${S.showArchived ? " open" : ""}><summary class="section-label" data-act="toggle-archived">Archived <span class="count">${list.length}</span></summary>
     <p class="sub" style="margin:0 0 8px">Only admins see this. Open someone to restore or delete them.</p>
@@ -2448,12 +2447,18 @@ function archivedSection(){
 /* Admin Home: people added with an email who can't sign in yet (the site hasn't been shared with them). */
 function waitingPanel(){
   if (!isEditor()) return "";
-  const list = S.items.filter(p => Onboarding.writable(p) && !p.gone && ["Pending", "Failed"].includes(p.accessStatus));
-  if (!list.length) return "";
-  return `<section><h2 class="section-label">Access to Check <span class="count hot">${list.length}</span></h2>
+  const list = S.items.filter(p => Onboarding.writable(p) && !p.gone && Onboarding.email(p) && p.accessStatus !== "Complete");
+  return `<details class="archived-sec"><summary class="section-label">Access to Check <span class="count">${list.length}</span></summary>
     <div class="list">${list.map(p => `<div class="panel wait-row">${avatar(p)}<div class="wait-info"><b>${esc(p.fullName)}</b><span class="sub" style="margin:0">${esc(p.accessStatus || "Pending")}</span></div>
       <button class="btn" data-act="member" data-id="${esc(p.id)}">Open Profile</button></div>`).join("")}</div>
-    <p class="sub" style="margin:6px 0 0">Open a profile to check Microsoft access or retry setup. A linked email alone does not confirm access.</p></section>`;
+    <p class="sub" style="margin:6px 0 0">Open a profile to check Microsoft access or retry setup. A linked email alone does not confirm access.</p></details>`;
+}
+function needsEmailPanel(){
+  if (!isEditor()) return "";
+  const list = S.items.filter(p => Onboarding.writable(p) && !p.gone && !Onboarding.email(p)).sort((a,b) => (a.fullName || "").localeCompare(b.fullName || ""));
+  return `<details class="archived-sec"><summary class="section-label">Needs an Email <span class="count">${list.length}</span></summary>
+    <p class="sub">Open a profile and edit their info to add the email they sign in with. Then check their access.</p>
+    <div class="list">${list.map(p => `<div class="panel wait-row">${avatar(p)}<div class="wait-info"><b>${esc(p.fullName)}</b><span class="sub">No email yet</span></div><button class="btn" data-act="member" data-id="${esc(p.id)}">Open Profile</button></div>`).join("")}</div></details>`;
 }
 /* ---------- Admin privileges ----------
    CONFIG.editors are the built-in admins. Admins can add more from a person's About page; those are kept in the
