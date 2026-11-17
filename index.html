@@ -61,6 +61,7 @@
 .c2-sel:disabled{display:none}
 
 .c2-namepick:focus-within{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}
+.status-picker{position:relative;display:inline-flex;cursor:pointer}.status-picker select{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}.status-picker:focus-within{outline:2px solid var(--accent);outline-offset:3px;border-radius:999px}
 </style>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -682,6 +683,7 @@ iframe[id^="nl-"],iframe[title="Netlify"],iframe[title*="Netlify"]{display:none!
 .c2-sel:disabled{display:none}
 
 .c2-namepick:focus-within{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}
+.status-picker{position:relative;display:inline-flex;cursor:pointer}.status-picker select{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}.status-picker:focus-within{outline:2px solid var(--accent);outline-offset:3px;border-radius:999px}
 </style>
 </head>
 <body>
@@ -717,14 +719,14 @@ const CONFIG = {
   announcementsListId: "",
   messagesListId: "",
   // Admins: only these sign-ins can edit Home-screen announcements and use Edit Schedule (My Profile → Admin).
-  editors: ["ashley.stmacary@therampchurch.com", "pastormarvin@therampchurch.com"],
+  editors: ["ashley.stmacary@therampchurch.com", "pastormarvin@therampchurch.com", "shanelle.moss@therampchurch.com"],
   wallDays: 30,                    // birthday wall: open for posting and visible for this many days
   guidelinesUrl: ""                // optional link shown under announcements
 };
 
 const onAppHost = !CONFIG.appHosts || CONFIG.appHosts.some(h => h.startsWith(".") ? location.hostname.endsWith(h) : location.hostname === h);
 // Bump together with CACHE in sw.js whenever the app changes.
-const APP_VERSION = "3";
+const APP_VERSION = "4";
 const DEMO = !CONFIG.clientId || /[?&]demo\b/.test(location.search) || !onAppHost;
 const SCOPES = ["User.Read", "User.ReadBasic.All", "Sites.ReadWrite.All"];
 
@@ -952,6 +954,7 @@ const LiveAPI = {
       servingChoices = (cols.value.find(c => c.name === "Serving")?.choice?.choices) || [];
       placements = (cols.value.find(c => c.name === "Placement")?.choice?.choices) || [];
       S.categories = (cols.value.find(c => c.name === "ServiceCategory")?.choice?.choices) || [];
+      S.statusChoices = (cols.value.find(c => c.name === "Status")?.choice?.choices) || [];
     } catch(e){}
     return {
       me: { id: me.id, name: me.displayName || this.account.name || "", emails: [me.mail, me.userPrincipalName, this.account.username].filter(Boolean).map(lc) },
@@ -1123,11 +1126,11 @@ const DemoAPI = {
       it.date = date; items.push(it);
     };
     const wk = wed(0) < t ? wed(1) : wed(0);
-    A(sun(0),"Main Lobby",1,"Accepted");
-    A(sun(0),"Aisle 2",0,"Accepted");
-    A(sun(0),"Guest Lobby",2,"Accepted");
-    A(sun(0),"Balcony",3,"Accepted");
-    A(sun(0),"Floater",6,"Accepted");
+    A(sun(0),"Front door",1,"Accepted");
+    A(sun(0),"Lobby greeter",0,"Accepted");
+    A(sun(0),"Lobby greeter",2,"Accepted");
+    A(sun(0),"Ipad position",3,"Accepted");
+    A(sun(0),"Guest Cards",6,"Accepted");
     A(wk,"Pastor's Door",0,"Pending","Wednesday Night","5:15 p.m.");
     A(wk,"Floater",4,"Accepted","Wednesday Night","5:15 p.m.");
     A(sun(1),"Aisle 3",0,"Pending");
@@ -1333,6 +1336,10 @@ function statusPill(i){
   return `<span class="pill neutral">${esc(i.status || "Draft")}</span>`;
 }
 
+function adminStatusPicker(i){
+  const choices = [...new Set([...(S.statusChoices?.length ? S.statusChoices : ["Pending", "Accepted", "Declined", "Absent"]), i.status].filter(Boolean))];
+  return `<label class="status-picker">${statusPill(i)}<select data-status-id="${esc(i.id)}" aria-label="Update status for ${esc(i.fullName || "this greeter")}" ${S.busy.has(i.id) ? "disabled" : ""}>${choices.map(v => `<option value="${esc(v)}" ${v === i.status ? "selected" : ""}>${esc(v === "Accepted" ? "Confirmed" : v === "Pending" ? "Needs Reply" : v)}</option>`).join("")}</select></label>`;
+}
 function cue(i, opts={}){
   const d = fromKey(i.date);
   const isPending = pending(i);
@@ -1746,7 +1753,7 @@ function adminNoService(k, rows){
 }
 /* Add Positions: one row per Security Name in the Roster that isn't on the date yet.
    Service Category (and Call Time) are copied from the date's existing rows. */
-const rosterPeople = () => S.items.filter(p => isProfile(p) && p.editable && !p.archived && !p.gone).sort((a, b) => Number(a.id) - Number(b.id));
+const rosterPeople = () => S.items.filter(p => isProfile(p) && p.editable && !p.archived && !p.gone && directoryVisible(p)).sort((a, b) => Number(a.id) - Number(b.id));
 function templateMissing(rows){
   const have = rows.filter(i => !isNoService(i));
   return rosterPeople().filter(p => !isNonActive(p) && !have.some(i => (p.email && i.email === p.email) || (p.fullName && lc(i.fullName) === lc(p.fullName))));
@@ -1773,7 +1780,7 @@ const GREETER_POSITIONS = ["Front door", "Lobby greeter", "Lobby greeter", "Ipad
 const sameGreeter = (a, b) => !!a && !!b && ((a.personId && b.personId && String(a.personId) === String(b.personId)) || (a.email && b.email && lc(a.email) === lc(b.email)) || (a.fullName && b.fullName && lc(a.fullName) === lc(b.fullName)));
 const precedingSunday = k => addDays(k, -(fromKey(k).getDay() || 7));
 function greeterUnavailable(p, k){
-  if (!p || p.gone || p.archived || isNonActive(p)) return true;
+  if (!p || p.gone || p.archived || isNonActive(p) || !directoryVisible(p)) return true;
   if (p.timeOff === k) return true;
   // Legacy absence submissions store formatted dates in Notes; new ones also retain ISO dates.
   const notes = String(p.notes || "");
@@ -1781,10 +1788,10 @@ function greeterUnavailable(p, k){
   if (iso && iso[1].split(",").includes(k)) return true;
   const legacy = (notes.match(/Dates of Absence:<\/strong>\s*([^<]+)/i) || ["", ""])[1];
   if (legacy.split(";").map(x => x.trim()).includes(fmtShort(k))) return true;
-  return S.items.some(i => !isProfile(i) && i.date === k && sameGreeter(i, p) && ["declined", "unavailable", "absent", "no show"].includes(lc(i.status)));
+  return S.items.some(i => !isProfile(i) && i.date === k && sameGreeter(i, p) && (["declined", "unavailable", "absent", "no show"].includes(lc(i.status)) || lc(i.category) === "absent"));
 }
 function fixedOpenings(rows){
-  const remaining = rows.filter(i => !["declined", "unavailable", "absent", "no show"].includes(lc(i.status)));
+  const remaining = rows.filter(i => !(["declined", "unavailable", "absent", "no show"].includes(lc(i.status)) || lc(i.category) === "absent"));
   return GREETER_POSITIONS.map((role, index) => {
     const at = remaining.findIndex(i => lc(i.role) === lc(role));
     if (at !== -1){ remaining.splice(at, 1); return null; }
@@ -1793,23 +1800,70 @@ function fixedOpenings(rows){
 }
 function sundayPreloadPlan(k){
   const source = precedingSunday(k), rows = S.items.filter(i => !isProfile(i) && i.date === k && !i.archived);
-  if (fromKey(k).getDay() !== 3 || rows.some(isNoService)) return {source, assignments: [], skipped: []};
-  const sunday = S.items.filter(i => !isProfile(i) && !i.archived && i.date === source && approved(i) && !isNoService(i));
-  const candidates = [], skipped = [];
-  for (const row of sunday){
-    if (candidates.some(x => sameGreeter(x.p, row)) || skipped.some(x => sameGreeter(x, row))) continue;
+  const sundayRows = S.items.filter(i => !isProfile(i) && !i.archived && i.date === source);
+  if (fromKey(k).getDay() !== 3 || rows.some(isNoService) || sundayRows.some(isNoService)) return {source, assignments: [], skipped: [], conflicts: []};
+  const assignments = [], skipped = [], conflicts = [], seen = [];
+  const capacity = new Map(); for (const role of GREETER_POSITIONS) capacity.set(lc(role), (capacity.get(lc(role)) || 0) + 1);
+  for (const row of sundayRows.filter(approved)){
+    if (seen.some(i => sameGreeter(i, row))) continue;
+    seen.push(row);
     const p = rosterPeople().find(p => sameGreeter(p, row));
     if (!p || greeterUnavailable(p, k)){ skipped.push(row); continue; }
-    if (rows.some(i => sameGreeter(i, p))) continue;
-    candidates.push({p, role: row.role});
+    const role = GREETER_POSITIONS.find(role => lc(role) === lc(row.role));
+    if (!role) continue;
+    const existing = rows.find(i => sameGreeter(i, p));
+    if (existing && lc(existing.role) === lc(role) && approved(existing)) continue;
+    const used = rows.filter(i => i !== existing && lc(i.role) === lc(role) && !["declined", "unavailable", "absent", "no show"].includes(lc(i.status))).length + assignments.filter(x => (!x.existing || lc(x.existing.role) !== lc(role)) && lc(x.role) === lc(role)).length;
+    if (used >= capacity.get(lc(role))){ conflicts.push(row); continue; }
+    assignments.push({role, p, existing});
   }
-  const assignments = fixedOpenings(rows).map(slot => {
-    let at = candidates.findIndex(x => lc(x.role) === lc(slot.role));
-    if (at === -1) return {...slot, p: null};
-    return {...slot, p: candidates.splice(at, 1)[0].p};
-  });
-  for (const slot of assignments) if (!slot.p && candidates.length) slot.p = candidates.shift().p;
-  return {source, assignments: assignments.filter(x => x.p), skipped};
+  return {source, assignments, skipped, conflicts};
+}
+async function syncSundayConfirmations(minDate = todayKey()){
+  if (!isEditor() || S.carryoverBusy) return;
+  S.carryoverBusy = true;
+  let changed = 0;
+  try {
+    const dates = [...new Set(S.items.filter(i => !isProfile(i) && !i.archived && approved(i) && i.date && fromKey(i.date).getDay() === 0).map(i => addDays(i.date, 3)))].filter(k => k >= minDate).sort();
+    for (const k of dates){
+      const targetRows = S.items.filter(i => !isProfile(i) && !i.archived && i.date === k);
+      if (targetRows.some(isNoService)) continue;
+      // Time off may be reported after Wednesday was copied. Stop showing that person confirmed.
+      for (const row of targetRows.filter(approved)){
+        const p = S.items.find(p => isProfile(p) && sameGreeter(p, row));
+        if (p && greeterUnavailable(p, k)){
+          const status = (S.statusChoices || []).includes("Absent") ? "Absent" : (S.statusChoices || []).includes("Unavailable") ? "Unavailable" : "Declined";
+          await API.update(row.id, {Status:status}); row.status = status; changed++;
+        }
+      }
+      const plan = sundayPreloadPlan(k);
+      for (const x of plan.assignments){
+        // Recheck after each write so retries and duplicate Sunday services remain safe.
+        if (greeterUnavailable(x.p, k)) continue;
+        if (x.existing){
+          await API.update(x.existing.id, {Placement:x.role, Status:"Accepted"});
+          x.existing.role = x.role; x.existing.status = "Accepted";
+        } else await assignGreeter(k, x.role, x.p, "Accepted");
+        changed++;
+      }
+      if (plan.conflicts.length) toast(`Review ${fmtShort(k)}: a Sunday position is already filled by another greeter.`, true);
+    }
+  } catch(err){ toast("Wednesday confirmations could not finish syncing. " + err.message, true); }
+  finally { S.carryoverBusy = false; }
+  return changed;
+}
+async function refreshWednesdayConfirmations(){
+  if (DEMO || !isEditor() || S.phase !== "ready" || S.refreshingCarryover || S.scheduleBusy || S.carryoverBusy || S.scheduleDirty || S.cardEdit || S.addPerson || S.annEdit || S.busy.size || document.visibilityState === "hidden" || document.activeElement?.closest('input,textarea,select,[contenteditable="true"]')) return;
+  S.refreshingCarryover = true;
+  try {
+    const data = await API.load();
+    if (S.scheduleBusy || S.scheduleDirty || S.busy.size || document.activeElement?.closest('input,textarea,select,[contenteditable="true"]')) return;
+    S.items = data.items; applyAdmins(EXTRA_ADMINS);
+    await Onboarding.load(S.items);
+    const changed = await syncSundayConfirmations();
+    if (changed || ["admin", "calendar", "home"].includes(S.view)){ render(); updateBadge(); }
+  } catch(err){ console.warn("Wednesday confirmation refresh:", err); }
+  finally { S.refreshingCarryover = false; }
 }
 async function ensureGreeterPositions(){
   if (DEMO || S.greeterPositionsReady) return;
@@ -1825,7 +1879,7 @@ async function ensureGreeterPositions(){
   }
   S.greeterPositionsReady = true;
 }
-async function assignGreeter(k, role, p){
+async function assignGreeter(k, role, p, status = "Pending"){
   const rows = S.items.filter(i => !isProfile(i) && i.date === k && !i.archived);
   if (rows.some(isNoService)) throw new Error("This date is marked No Service.");
   if (!fixedOpenings(rows).some(x => x.role === role)) throw new Error("That position has already been filled. Refresh and review the schedule.");
@@ -1833,7 +1887,7 @@ async function assignGreeter(k, role, p){
   if (rows.some(i => sameGreeter(i, p))) throw new Error("This greeter already has a row on this date. Edit their existing placement instead.");
   const category = templateCategory(rows) || (fromKey(k).getDay() === 3 ? "Wednesday Night" : fromKey(k).getDay() === 0 ? "Sunday Morning" : "");
   if (!category) throw new Error("Choose a Sunday or Wednesday, or add a service category first.");
-  const extra = {SecurityName: p.fullName, Placement: role, Status: "Pending", ArchiveStatus: "Active"};
+  const extra = {SecurityName: p.fullName, Placement: role, Status: status, ArchiveStatus: "Active"};
   if (p.personId) extra.NameLookupId = String(p.personId);
   const call = templateCallTime(rows); if (call) extra.CallTime = call;
   await ensureGreeterPositions();
@@ -1841,18 +1895,7 @@ async function assignGreeter(k, role, p){
   const item = normalize(id, {...extra, ServiceCategory: category, email: p.email});
   item.date = k; S.items.push(item);
 }
-function adminFixedPositions(k, rows){
-  if (rows.some(isNoService)) return "";
-  const openings = fixedOpenings(rows), wed = fromKey(k).getDay() === 3;
-  const plan = sundayPreloadPlan(k), available = rosterPeople().filter(p => !greeterUnavailable(p, k) && !rows.some(i => sameGreeter(i, p)));
-  return `<section class="panel stack"><h2 class="section-label" style="margin:0">${wed ? "Wednesday Team" : "Positions"}</h2>
-    <p class="sub">${6 - openings.length} of 6 positions filled. Front door · Lobby greeter ×2 · Ipad position ×2 · Guest Cards.</p>
-    ${wed ? `<p class="sub">Preload greeters who accepted a placement on ${esc(fmtLong(plan.source))}. Unavailable greeters are skipped. Existing assignments stay in place; new requests need a fresh reply.</p>
-    ${plan.assignments.length ? `<details><summary>Review Sunday team (${plan.assignments.length})</summary><ul>${plan.assignments.map(x => `<li>${esc(x.role)}: ${esc(x.p.fullName)}</li>`).join("")}</ul></details>` : `<p class="hint">${openings.length ? "No eligible Sunday greeters to add. Choose a name on an open position below." : "All six positions are filled."}</p>`}
-    ${plan.skipped.length ? `<p class="hint">Skipped unavailable or inactive greeters: ${plan.skipped.map(p => esc(p.fullName)).join(", ")}.</p>` : ""}
-    <button class="btn blue" type="button" data-act="preload-sunday" data-date="${k}" ${S.scheduleBusy || !plan.assignments.length ? "disabled" : ""}>${S.scheduleBusy ? "Saving…" : "Preload Sunday Team"}</button>` : ""}
-    ${openings.length && !available.length ? `<p class="hint">No available unscheduled greeters. You can review existing assignments below.</p>` : ""}</section>`;
-}
+function adminFixedPositions(){ return ""; }
 /* Inline "Delete this position?" check on an Edit Schedule card. */
 function delAsk(i){
   if (S.delAsk !== i.id) return "";
@@ -1891,9 +1934,9 @@ function viewAdmin(){
       <div class="c2-main"><span class="c2-face">${avatar(prof || i, "face")}</span>
         <div class="c2-info"><label class="c2-namepick" title="Choose a name"><b class="c2-name" data-nm>${esc(i.fullName || "Not assigned")}</b><span class="c2-dd" aria-hidden="true">${ICON.next}</span>
           <select class="c2-sel" name="person" data-f="GreeterId" aria-label="Choose a name for ${esc(i.role || "this position")}" ${locked ? "disabled" : ""}>
-          ${!current ? `<option value="current:${sid}">${esc(i.fullName || "Not assigned")}</option>` : ""}${candidates.map(p => `<option value="${esc(p.id)}" ${current?.id === p.id ? "selected" : ""}>${esc(p.fullName)}</option>`).join("")}</select></label>
+          ${!current ? `<option value="current:${sid}">${esc(directoryVisible(i) ? i.fullName || "Not assigned" : "— Choose another greeter —")}</option>` : ""}${candidates.map(p => `<option value="${esc(p.id)}" ${current?.id === p.id ? "selected" : ""}>${esc(p.fullName)}</option>`).join("")}</select></label>
           <span class="c2-pos">${esc(i.role || "No position")}</span><span class="sub c2-sub">${esc([i.category, fmtShort(i.date)].filter(Boolean).join(" · "))}</span></div>
-        <div class="c2-side">${statusPill(i)}<div class="c2-btns"><button class="iconbtn del-btn" type="button" data-act="del-ask" data-id="${sid}" aria-label="Delete this placement" title="Delete">${ICON.trash}</button>${locked
+        <div class="c2-side">${adminStatusPicker(i)}<div class="c2-btns"><button class="iconbtn del-btn" type="button" data-act="del-ask" data-id="${sid}" aria-label="Delete this placement" title="Delete">${ICON.trash}</button>${locked
           ? `<button class="iconbtn notes-btn" type="button" data-act="admin-unlock" data-id="${sid}" aria-label="Edit this placement" title="Edit">${ICON.pencil}</button>`
           : saveIcon(svcFilled(i.role) && lc(i.status) !== "accepted")}</div></div>
       </div>${delAsk(i)}
@@ -1913,14 +1956,13 @@ function viewAdmin(){
   }).join("");
   const cards = fixed + remaining.map(card).join("");
   return `${backBar("Edit Schedule")}
-    <ol class="panel steps"><li>Choose a date. On Wednesdays, review and preload the preceding Sunday’s team, then fill open positions.</li><li>Tap a name or the arrow beside it to choose who serves.</li><li>Hit the <span class="inline-check" aria-label="check">${ICON.check}</span> to save. A request is sent to the greeter to accept or decline.</li></ol>
+    <ol class="panel steps"><li>Tap a name or the arrow beside it to choose who serves.</li><li>Hit the <span class="inline-check" aria-label="check">${ICON.check}</span> to save. A request is sent to the greeter to accept or decline.</li></ol>
     <div class="date-chips" role="group" aria-label="Service dates">${chips}${adminPickChip()}</div>
     ${adminPickField()}
     ${adminDayHeader(k, dayRows)}
     ${adminNoService(k, dayRows)}
-    ${adminFixedPositions(k, dayRows)}
-    <details><summary>Add other team members</summary>${adminTemplate(k, dayRows)}</details>
     <p class="sub" style="margin:-4px 0 0">${rows.length} ${rows.length === 1 ? "person" : "people"} scheduled</p>
+    ${fromKey(k).getDay() === 3 && sundayPreloadPlan(k).conflicts.length ? `<p class="sub" role="status">A confirmed Sunday greeter’s position is already occupied. Review this Wednesday’s assignments.</p>` : ""}
     ${cards ? `<div class="list">${cards}</div>` : ""}`;
 }
 
@@ -2130,7 +2172,7 @@ document.addEventListener("click", async e => {
   const b = e.target.closest("[data-act]"); if (!b) return;
   const act = b.dataset.act, item = S.items.find(i => i.id === b.dataset.id);
   switch(act){
-    case "tab": S.annEdit = false; S.annEditId = null; S.stack = []; S.absenceDone = false; if (b.dataset.view === "calendar" && S.view !== "calendar"){ const t = new Date(); S.cal.month = new Date(t.getFullYear(), t.getMonth(), 1); S.cal.sel = todayKey(); } go(b.dataset.view, null, false); break;
+    case "tab": S.scheduleDirty = false; S.annEdit = false; S.annEditId = null; S.stack = []; S.absenceDone = false; if (b.dataset.view === "calendar" && S.view !== "calendar"){ const t = new Date(); S.cal.month = new Date(t.getFullYear(), t.getMonth(), 1); S.cal.sel = todayKey(); } go(b.dataset.view, null, false); break;
     case "back": { if (ServeProfile.back()) break; const prev = S.stack.pop() || { view: "home" }; go(prev.view, prev.arg, false); break; }
     case "theme": toggleTheme(); break;
     case "np-open": if (isEditor()){ S.addPerson = true; render(); $("#np-name")?.focus(); } break;
@@ -2262,7 +2304,7 @@ document.addEventListener("click", async e => {
       } catch(err){ toast(`Added ${added} of ${miss.length}. ` + err.message, true); }
       S.tplBusy = null; render(); break;
     }
-    case "admin-date": S.tplAsk = null; S.delAsk = null; S.catEdit = null; S.noSvcAsk = null; S.pickOpen = false; S.adminDate = b.dataset.date; render(); document.querySelector(`[data-act="admin-date"][data-date="${S.adminDate}"]`)?.scrollIntoView({ inline: "center", block: "nearest" }); break;
+    case "admin-date": S.scheduleDirty = false; S.tplAsk = null; S.delAsk = null; S.catEdit = null; S.noSvcAsk = null; S.pickOpen = false; S.adminDate = b.dataset.date; render(); document.querySelector(`[data-act="admin-date"][data-date="${S.adminDate}"]`)?.scrollIntoView({ inline: "center", block: "nearest" }); break;
     case "del-ask": S.delAsk = b.dataset.id; render(); break;
     case "del-keep": S.delAsk = null; render(); break;
     case "del-yes": {
@@ -2402,7 +2444,7 @@ document.addEventListener("submit", async e => {
     S.scheduleBusy = true; render();
     try { await assignGreeter(k, role, p); toast(`Request sent: ${p.fullName}, ${role}`); }
     catch(err){ toast("Couldn't assign greeter. " + err.message, true); }
-    S.scheduleBusy = false; render(); updateBadge(); return;
+    S.scheduleBusy = false; S.scheduleDirty = false; render(); updateBadge(); return;
   }
   if (e.target.classList.contains("admin-row")){
     if (!isEditor()) return;
@@ -2414,7 +2456,7 @@ document.addEventListener("submit", async e => {
     const chosen = rosterPeople().find(p => p.id === e.target.querySelector('[data-f="GreeterId"]')?.value);
     const changedPerson = chosen && !sameGreeter(chosen, item);
     if (changedPerson && (greeterUnavailable(chosen, item.date) || S.items.some(i => i.id !== item.id && i.date === item.date && !isProfile(i) && !i.archived && sameGreeter(i, chosen)))){ toast("Choose an available greeter who is not already scheduled.", true); return; }
-    const status = "Pending";
+    const status = changedPerson ? "Pending" : item.status || "Pending";
     if (!changedPerson && placement === item.role && lc(item.status) === "pending"){ btn.disabled = true; return; }
     const fields = changedPerson ? {SecurityName: chosen.fullName, NameLookupId: chosen.personId ? String(chosen.personId) : null} : {};
     if (placement !== item.role) fields.Placement = placement || null;
@@ -2425,7 +2467,8 @@ document.addEventListener("submit", async e => {
       await API.update(item.id, fields);
       item.role = placement; item.status = status;
       if (changedPerson) Object.assign(item, {fullName:chosen.fullName, email:chosen.email || "", personId:chosen.personId || ""});
-      S.adminUnlocked?.delete(item.id);
+      S.adminUnlocked?.delete(item.id); S.scheduleDirty = false;
+      await syncSundayConfirmations();
       toast(`${svcFilled(placement) ? "Request sent" : "Saved"}: ${item.fullName}, ${placement || "no placement"}, ${fmtShort(item.date)}`); render(); updateBadge();
     } catch(err){ toast("Couldn't save the change. " + err.message, true); btn.disabled = false; btn.classList.remove("busy"); }
     return;
@@ -2486,6 +2529,18 @@ document.addEventListener("input", e => {
   if (e.target.id === "cat-pick"){ const f = e.target.form, v = e.target.value.trim(); f.querySelector(".save-btn").disabled = !v || v === f.dataset.cur; return; } if (e.target.id === "ab-notes") absState().notes = e.target.value; });
 
 document.addEventListener("change", async e => {
+  if (e.target.dataset.statusId){
+    if (!isEditor()) return;
+    const item = S.items.find(i => i.id === e.target.dataset.statusId), value = e.target.value;
+    if (!item || S.busy.has(item.id)) return;
+    const allowed = S.statusChoices?.length ? S.statusChoices : ["Pending", "Accepted", "Declined", "Absent"];
+    if (!allowed.includes(value)) return;
+    S.busy.add(item.id); e.target.disabled = true;
+    try { await API.update(item.id, {Status:value}); item.status = value; await syncSundayConfirmations(); toast(`Status updated for ${item.fullName}`); }
+    catch(err){ toast("Couldn't update status. " + err.message, true); }
+    S.busy.delete(item.id); render(); updateBadge(); return;
+  }
+
   if (e.target.id === "ann-flyer"){
     const f = e.target.files[0]; if (!f) return;
     S.annFlyer = S.annFlyer || {}; S.annFlyer.file = f; S.annFlyer.preview = URL.createObjectURL(f); S.annFlyer.remove = false;
@@ -2494,6 +2549,7 @@ document.addEventListener("change", async e => {
   if (e.target.id === "admin-pick"){ if (e.target.value){ S.adminExtra = e.target.value; S.adminDate = e.target.value; S.catEdit = null; S.noSvcAsk = null; S.pickOpen = false; render(); } return; }
   const adRow = e.target.closest(".admin-row");
   if (adRow && e.target.name === "person"){
+    S.scheduleDirty = true;
     const p = rosterPeople().find(p => p.id === e.target.value);
     const label = adRow.querySelector('[data-nm]'); if (label) label.textContent = p?.fullName || "Not assigned";
     const face = adRow.querySelector('.c2-face'); if (face) face.innerHTML = avatar(p || null, "face");
@@ -2730,6 +2786,7 @@ function cardEditForm(p){
 }
 /* "Admin" tag on the profile of anyone in CONFIG.editors (matched by their linked or pending email). */
 function adminTag(p){
+
   const ed = (CONFIG.editors || []).map(e => String(e).toLowerCase());
   const norm = e => { const x = String(e || "").toLowerCase().trim(), m = x.match(/^(.+)_([^_#]+\.[^_#]+)#ext#@/); return m ? `${m[1]}@${m[2]}` : x; };
   const hit = [p && p.email, p && p.pendingEmail].filter(Boolean).some(e => ed.includes(norm(e)));
@@ -3025,23 +3082,26 @@ async function start(){
     const signedIn = await API.init();
     if (!signedIn){ S.phase = "signin"; render(); return; }
     const data = await API.load();
-    S.me = data.me; S.items = data.items; S.names = data.names; S.servingChoices = data.servingChoices || []; S.placements = data.placements || []; S.announcements = data.announcements || []; markNewAnns(); markNewAssignments(); setTimeout(linkPendingPeople, 1500); S.messages = data.messages || [];
+    S.me = data.me; S.items = data.items; applyAdmins(EXTRA_ADMINS); S.names = data.names; S.servingChoices = data.servingChoices || []; S.placements = data.placements || []; S.announcements = data.announcements || []; markNewAnns(); markNewAssignments(); setTimeout(linkPendingPeople, 1500); S.messages = data.messages || [];
     const t = new Date(); S.cal.month = new Date(t.getFullYear(), t.getMonth(), 1); S.cal.sel = todayKey();
     restoreNav();
     ServeProfile.apply();
     if (ROSTER_ADD){ try { sessionStorage.removeItem(ROSTER_ADD_KEY); } catch (_) {} S.view = "directory"; S.arg = null; S.stack = []; S.addPerson = isEditor(); S.rosterRouteHandled = S.addPerson; }
     if (wantsInstall){ S.view = "install"; S.arg = null; S.stack = []; }
+    await syncSundayConfirmations();
     S.phase = "ready"; render(); maybeConfetti(); updateBadge();
     const renderIdle = () => { if (S.phase === 'ready' && !Comm.busy && !S.busy.size && !document.activeElement?.closest('input,textarea,select,[contenteditable="true"]')) render(); };
     void Comm.load().then(renderIdle);
     void Onboarding.load(S.items).then(() => Onboarding.confirmSelf()).then(renderIdle);
-    void loadAdmins(false).then(() => { if (ROSTER_ADD && !S.rosterRouteHandled && S.view === "directory" && isEditor()){ S.addPerson = true; S.rosterRouteHandled = true; } renderIdle(); });
+    void loadAdmins(false).then(() => { if (ROSTER_ADD && !S.rosterRouteHandled && S.view === "directory" && isEditor()){ S.addPerson = true; S.rosterRouteHandled = true; } void syncSundayConfirmations().then(renderIdle); renderIdle(); });
     void Push.init();
   } catch(e){
     console.error(e); S.error = e.message || String(e); S.phase = "error"; render();
   }
 }
 start();
+setInterval(refreshWednesdayConfirmations, 60000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") void refreshWednesdayConfirmations(); });
 
 /* When someone comes back to an app that's already open, check for a newer version and refresh to it,
    unless they're in the middle of editing something. */
