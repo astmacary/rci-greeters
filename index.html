@@ -726,7 +726,7 @@ const CONFIG = {
 
 const onAppHost = !CONFIG.appHosts || CONFIG.appHosts.some(h => h.startsWith(".") ? location.hostname.endsWith(h) : location.hostname === h);
 // Bump together with CACHE in sw.js whenever the app changes.
-const APP_VERSION = "4";
+const APP_VERSION = "5";
 const DEMO = !CONFIG.clientId || /[?&]demo\b/.test(location.search) || !onAppHost;
 const SCOPES = ["User.Read", "User.ReadBasic.All", "Sites.ReadWrite.All"];
 
@@ -1841,8 +1841,9 @@ async function syncSundayConfirmations(minDate = todayKey()){
         // Recheck after each write so retries and duplicate Sunday services remain safe.
         if (greeterUnavailable(x.p, k)) continue;
         if (x.existing){
-          await API.update(x.existing.id, {Placement:x.role, Status:"Accepted"});
-          x.existing.role = x.role; x.existing.status = "Accepted";
+          const roleValue = (S.placements || []).find(v => lc(v) === lc(x.role)) || x.role;
+          await API.update(x.existing.id, {Placement:roleValue, Status:"Accepted"});
+          x.existing.role = roleValue; x.existing.status = "Accepted";
         } else await assignGreeter(k, x.role, x.p, "Accepted");
         changed++;
       }
@@ -1871,7 +1872,8 @@ async function ensureGreeterPositions(){
   const col = data.value.find(c => c.name === "Placement");
   if (!col) throw new Error("The schedule needs a Placement column.");
   if (col.choice){
-    const choices = [...new Set([...(col.choice.choices || []), ...GREETER_POSITIONS])];
+    const choices = [...(col.choice.choices || [])];
+    for (const role of GREETER_POSITIONS) if (!choices.some(v => lc(v) === lc(role))) choices.push(role);
     if (choices.length !== (col.choice.choices || []).length){
       try { await API.g(`/sites/${API.siteId}/lists/${CONFIG.listId}/columns/${col.id}`, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({choice: {...col.choice, choices}})}); }
       catch(err){ throw new Error("A Microsoft list owner needs to add these Placement choices: " + [...new Set(GREETER_POSITIONS)].join(", ") + ". " + err.message); }
@@ -1887,7 +1889,8 @@ async function assignGreeter(k, role, p, status = "Pending"){
   if (rows.some(i => sameGreeter(i, p))) throw new Error("This greeter already has a row on this date. Edit their existing placement instead.");
   const category = templateCategory(rows) || (fromKey(k).getDay() === 3 ? "Wednesday Night" : fromKey(k).getDay() === 0 ? "Sunday Morning" : "");
   if (!category) throw new Error("Choose a Sunday or Wednesday, or add a service category first.");
-  const extra = {SecurityName: p.fullName, Placement: role, Status: status, ArchiveStatus: "Active"};
+  const roleValue = (S.placements || []).find(v => lc(v) === lc(role)) || role;
+  const extra = {SecurityName: p.fullName, Placement: roleValue, Status: status, ArchiveStatus: "Active"};
   if (p.personId) extra.NameLookupId = String(p.personId);
   const call = templateCallTime(rows); if (call) extra.CallTime = call;
   await ensureGreeterPositions();
