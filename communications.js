@@ -1,0 +1,643 @@
+function communicationPlural(n, one, many){ return `${n} ${n === 1 ? one : many}`; }
+/* Communication records stay in their own ministry's SharePoint site.
+   SharePoint permissions, not these UI checks, enforce access. See COMMUNICATIONS.md. */
+/* Rich-text formatting for messages: mirrors the Production Notes editor's toolbar/colors/sanitizer
+   pattern, but with its own names (COMM_COLORS/commToolbar/commRanges/commPreview) so this file never
+   collides with the page-global KEEP/cleanHtml/NOTES_COLORS/notesToolbar some apps already define.
+   It still calls the page's own global cleanHtml()/KEEP (present in every app) to sanitize. */
+const COMM_COLORS = [
+  { label: "Red", hex: "#C0392B" },
+  { label: "Orange", hex: "#D98E04" },
+  { label: "Green", hex: "#1E8449" },
+  { label: "Blue", hex: "#2E5EAA" },
+  { label: "Purple", hex: "#6C3483" }
+];
+function commToolbar(target){
+  return `<div class="notes-tools" role="toolbar" aria-label="Formatting">
+      <button type="button" class="tool" data-comm="comm-fmt" data-target="${target}" data-cmd="bold" aria-label="Bold"><b>B</b></button>
+      <button type="button" class="tool" data-comm="comm-fmt" data-target="${target}" data-cmd="italic" aria-label="Italic"><i>I</i></button>
+      <button type="button" class="tool" data-comm="comm-fmt" data-target="${target}" data-cmd="insertUnorderedList" aria-label="Bulleted list">• List</button>
+      <button type="button" class="tool" data-comm="comm-fmt" data-target="${target}" data-cmd="insertOrderedList" aria-label="Numbered list">1. List</button>
+      <button type="button" class="tool" data-comm="comm-fmt" data-target="${target}" data-cmd="outdent" aria-label="Decrease indent">⇤</button>
+      <button type="button" class="tool" data-comm="comm-fmt" data-target="${target}" data-cmd="indent" aria-label="Increase indent">⇥</button>
+    </div>
+    <div class="notes-tools" role="toolbar" aria-label="Text color">
+      <span class="hint" style="margin:0 2px 0 0">Color</span>
+      ${COMM_COLORS.map(c => `<button type="button" class="tool swatch" data-comm="comm-fmt" data-target="${target}" data-cmd="foreColor" data-val="${c.hex}" style="background:${c.hex}" aria-label="${c.label} text" title="${c.label}"></button>`).join("")}
+      <button type="button" class="tool swatch reset" data-comm="comm-fmt" data-target="${target}" data-cmd="foreColor" data-val="reset" aria-label="Default text color" title="Default">×</button>
+    </div>`;
+}
+/* Remembers the cursor position in each composer so a toolbar click (which steals focus) still applies there. */
+const commRanges = {};
+document.addEventListener("selectionchange", () => {
+  const sel = getSelection(); if (!sel.rangeCount) return;
+  ["comm-body","comm-edit-body","comm-blast-body"].forEach(id => { const ed = document.getElementById(id); if (ed && ed.contains(sel.anchorNode)) commRanges[id] = sel.getRangeAt(0).cloneRange(); });
+});
+document.addEventListener("mousedown", e => { if (e.target.closest(".tool")) e.preventDefault(); });
+/* Plain-text rendering of a sanitized message body, for length checks and the truncated board-preview snippet. */
+function commPreview(html){
+  const spaced = cleanHtml(html || "")
+    .replace(/<(p|div|li|h1|h2|h3|h4|tr|blockquote|br)[^>]*>/gi, " $&")
+    .replace(/<\/(p|div|li|h1|h2|h3|h4|tr|blockquote)>/gi, "$& ");
+  const d = document.createElement("div"); d.innerHTML = spaced;
+  return (d.textContent || "").replace(/\s+/g, " ").trim();
+}
+
+/* ---------- Pictures in board posts and replies ----------
+   Pictures are resized (longest side 1600 px) and saved in the board site's Site Assets library under
+   Messages/<board list id>/. The message body keeps a plain "📷 Picture" link to each one, so no new
+   SharePoint column is needed; the app turns those links into pictures (tap to open full screen).
+   Private messages don't take pictures, because Site Assets is readable by everyone on the site. */
+const COMM_PIC_MAX = 4;
+const COMM_PIC_RE = /\/SiteAssets\/Messages\//i;
+const commPicCache = new Map();
+function commPicUrl(href){
+  if (commPicCache.has(href)) return commPicCache.get(href);
+  const p = (async () => {
+    const share = 'u!' + btoa(unescape(encodeURIComponent(href))).replace(/=+$/, '').replace(/\//g, '_').replace(/\+/g, '-');
+    const item = await API.g(`/shares/${share}/driveItem`);
+    const dl = item && item['@microsoft.graph.downloadUrl']; if (!dl) throw new Error('No download link');
+    const res = await fetch(dl); if (!res.ok) throw new Error(String(res.status));
+    return URL.createObjectURL(await res.blob());
+  })();
+  commPicCache.set(href, p); p.catch(() => commPicCache.delete(href));   // only successful loads are kept
+  return p;
+}
+function commHydratePics(){
+  document.querySelectorAll('.comm-text a[href]:not([data-pic])').forEach(a => {
+    const href = a.getAttribute('href') || ''; if (!COMM_PIC_RE.test(href)) return;
+    a.dataset.pic = '1'; a.classList.add('comm-pic'); a.setAttribute('aria-label', 'Picture, tap to open');
+    if (DEMO) return;
+    commPicUrl(href).then(url => { if (!a.isConnected) return; a.dataset.url = url; a.innerHTML = `<img alt="Picture" src="${url}">`; })
+      .catch(() => { if (a.isConnected) a.textContent = '📷 Picture (tap to open)'; });
+  });
+}
+let commPicQueued = false;
+new MutationObserver(() => { if (commPicQueued) return; commPicQueued = true; requestAnimationFrame(() => { commPicQueued = false; commHydratePics(); }); })
+  .observe(document.documentElement, { childList: true, subtree: true });
+document.addEventListener('click', e => {
+  const a = e.target.closest('a.comm-pic'); if (!a || !a.dataset.url) return;
+  e.preventDefault(); if (typeof openLightbox === 'function') openLightbox(a.dataset.url, 'Picture'); else window.open(a.dataset.url, '_blank');
+});
+document.addEventListener('change', async e => {
+  const input = e.target.closest('input[data-comm-pics]'); if (!input) return;
+  const key = input.dataset.key, list = (Comm.pics[key] ||= []), files = [...input.files]; input.value = '';
+  for (const f of files) {
+    if (list.length >= COMM_PIC_MAX) { toast(`Up to ${COMM_PIC_MAX} pictures per message.`, true); break; }
+    try { const blob = await resizeImage(f, 1600); if (!blob) throw new Error('unreadable'); list.push({ blob, url: URL.createObjectURL(blob) }); }
+    catch (_) { toast('That picture could not be read. Try a JPEG or PNG.', true); }
+  }
+  render();
+});
+(() => { const st = document.createElement('style'); st.textContent = `
+  .comm-text a.comm-pic{display:block;margin:8px 0;max-width:100%;text-decoration:none}
+  .comm-text a.comm-pic img{display:block;max-width:100%;max-height:340px;border-radius:10px;object-fit:contain}
+  .comm-pic-previews{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px}
+  .comm-pic-preview{display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+  .comm-pic-preview img{width:88px;height:88px;object-fit:cover;border-radius:8px;border:1px solid var(--line,#ccc)}
+  .comm-pic-add{cursor:pointer;display:inline-flex;align-items:center}`; document.head.appendChild(st); })();
+
+// Older app versions already hide pin metadata, so they also hide reactions.
+const REACTION_PARENT = 'pin:reaction:';
+const BOARD_REACTIONS = {up:['👍','Thumbs up'], down:['👎','Thumbs down'], heart:['❤️','Heart']};
+const Comm = {
+  selected: 'greeters', thread: '', mode: 'board', data: {}, meta: {}, drafts: {}, busy: false, edit: null, meId: '', identityKey: '', extraAdmins: {}, showHidden: false, composeOpen: false, generation: 0, moderationReady: true,
+  // Verified in SharePoint: author-only reads, member Contribute, designated leader Design.
+  privateReady: { greeters: true },
+  lists: {"greeters": {"board": "55c6c700-a891-4aec-bcc2-359d37035149", "contacts": "cf622a3d-886f-41a2-b653-c777e47ae78e"}},
+  spaces() { return S.me ? [{key: 'greeters', name: 'Greeters', full: 'Greeters', sitePath: CONFIG.sitePath, editors: BASE_EDITORS}] : []; },
+  space(key = this.selected) { return this.spaces().find(t => t.key === key); },
+  seenKey(key) { return `rci-serve:messages:${DEMO ? 'demo:' : ''}${S.me?.emails?.[0] || ''}:${key}`; },
+  seen(key) { try { return new Set(JSON.parse(localStorage.getItem(this.seenKey(key)) || '[]')); } catch (_) { return new Set(); } },
+  unread(key) { const seen = this.seen(key); return (this.data[key]?.board || []).filter(r => !this.metadata(r) && !this.hiddenRow(r,this.data[key],key) && !seen.has(r.id) && !this.own(r)).length; },
+  totalUnread() { return this.spaces().reduce((n,t) => n + this.unread(t.key), 0); },
+  markThread() {
+    const d = this.data[this.selected]; if (!d || !this.thread) return;
+    const seen = this.seen(this.selected);
+    d.board.filter(r => r.id === this.thread || r.parent === this.thread).forEach(r => seen.add(r.id));
+    this.saveSeen(this.selected, seen);
+  },
+  saveSeen(key, seen) { try { localStorage.setItem(this.seenKey(key), JSON.stringify([...seen].slice(-10000))); } catch (_) {} },
+  /* Opening the board counts as reading the posts shown on it; no click into the post is needed.
+     Posts first seen on this visit keep a "New" tag until the person leaves the board. Replies stay
+     unread until the conversation is opened, since only the reply count shows on the board. */
+  newOnVisit: new Set(),
+  markShown(key, roots) {
+    const seen = this.seen(key);
+    if (!document.querySelector(`.comm-board[data-space="${CSS.escape(key)}"]`)) this.newOnVisit = new Set();
+    let changed = false;
+    roots.forEach(r => { if (!seen.has(r.id) && !this.own(r)) { seen.add(r.id); this.newOnVisit.add(r.id); changed = true; } });
+    if (changed) this.saveSeen(key, seen);
+    return seen;
+  },
+  normalize(r) { r = { ...r, fields: r.fields || {} }; return { id: String(r.id), parent: String(r.fields.ParentId || ''), title: r.fields.Title || '', text: r.fields.Body || '', name: r.createdBy?.user?.displayName || 'Team member', email: lc(r.createdBy?.user?.email), at: r.createdDateTime || '', authorId: r.createdBy?.user?.id || '', etag: r['@odata.etag'] || r.eTag || '' }; },
+  async list(t, name) {
+    this.siteIds ||= {};
+    let siteId = API.sites?.[t.key]?.siteId || (t.key === 'serve' ? API.sites?.church?.siteId : '') || API.siteId || this.siteIds[t.sitePath];
+    if (!siteId) { this.siteRequests ||= {}; this.siteRequests[t.sitePath] ||= API.g(`/sites/${CONFIG.siteHost}:${t.sitePath}?$select=id`).then(r => r.id).finally(() => { delete this.siteRequests[t.sitePath]; }); siteId = await this.siteRequests[t.sitePath]; this.siteIds[t.sitePath] = siteId; }
+    const id = this.lists[t.key]?.[name === 'Team Board' ? 'board' : 'contacts'];
+    if (!id) throw new Error('Message storage has not been configured.');
+    return `/sites/${siteId}/lists/${id}/items`;
+  },
+  async load() {
+    if (this.loadTask) return this.loadTask;
+    this.loadTask = this.loadData().finally(() => { this.loadTask = null; });
+    return this.loadTask;
+  },
+  async loadData() {
+    const identityKey = S.me?.emails?.join('|') || '';
+    if (this.identityKey !== identityKey) { this.meId = ''; this.data = {}; this.meta = {}; this.identityKey = identityKey; }
+    const generation = this.generation;
+    if (!this.meId && S.me?.id) this.meId = S.me.id;
+    if (!DEMO && !this.meId) { try { this.meId = (await API.g('/me?$select=id')).id || ''; } catch (_) {} }
+
+    const allowed = new Set(this.spaces().map(t => t.key));
+    for (const k of Object.keys(this.data)) if (!allowed.has(k)) { delete this.data[k]; delete this.meta[k]; }
+    await Promise.all(this.spaces().map(async t => {
+      const d = { board: [], contacts: [], error: '', contactError: '' };
+      if (DEMO) {
+        this.data[t.key] ||= { ...d, board: [{ id: 'welcome', parent: '', title: `Welcome to ${t.name}`, text: 'Use this board to stay connected. Open a conversation to read and reply.', name: 'Team leader', email: 'leader@example.org', at: new Date().toISOString() }] };
+        return;
+      }
+      await Promise.all([
+        (async () => { try {
+          const base = await this.list(t,'Team Board'); (this.meta[t.key] ||= {}).board = base;
+          d.board = (await API.all(base + '?$expand=fields($select=Title,Body,ParentId)&$top=200')).map(r => this.normalize(r));
+          await this.resolveAuthors(d.board);
+        } catch (e) { d.error = e.status === 404 ? 'This board is awaiting setup. Please contact your leader.' : 'Unable to load this board. Refresh to try again.'; } })(),
+        (async () => { if (!this.privateReady[t.key]) return; try {
+          const base = await this.list(t,'Private Contacts'); (this.meta[t.key] ||= {}).contacts = base;
+          d.contacts = (await API.all(base + '?$expand=fields($select=Title,Body,ParentId)&$top=200')).map(r => this.normalize(r));
+          await this.resolveAuthors(d.contacts);
+        } catch (_) { d.contactError = 'Unable to load private messages. Please try again.'; } })(),
+        (async () => { try { const base = await this.list(t,'Team Board'); await this.loadAdminEmails(t,base.split('/')[2]); } catch (_) {} })()
+      ]);
+      if (generation === this.generation) this.data[t.key] = d;
+    }));
+    if (!this.space()) { this.selected = this.spaces()[0]?.key || ''; this.thread = ''; }
+  },
+  pics: {},
+  picField(kind, parent) {
+    const key = this.draftKey(kind, parent), list = this.pics[key] || [];
+    return `<div class="field"><div class="comm-pic-previews">${list.map((p,i) => `<div class="comm-pic-preview"><img alt="Picture ${i+1}" src="${p.url}"><button type="button" class="btn" data-comm="pic-remove" data-key="${esc(key)}" data-i="${i}" aria-label="Remove picture ${i+1}">Remove</button></div>`).join('')}</div>${list.length < COMM_PIC_MAX ? `<label class="btn comm-pic-add">📷 ${list.length ? 'Add Another Picture' : 'Add a Picture'}<input type="file" accept="image/*" multiple hidden data-comm-pics data-key="${esc(key)}"></label>` : `<p class="hint">${COMM_PIC_MAX} pictures is the most per message.</p>`}</div>`;
+  },
+  async uploadPics(base, pics) {
+    const [, , siteId, , listId] = base.split('/');
+    this.assetDrives ||= {};
+    this.assetDrives[siteId] ||= (async () => {
+      const drives = (await API.g(`/sites/${siteId}/drives?$select=id,name,webUrl`)).value || [];
+      const d = drives.find(x => /\/SiteAssets$/i.test(x.webUrl || '')) || drives.find(x => /site assets/i.test(x.name || ''))
+        || await API.g(`/sites/${siteId}/lists/${encodeURIComponent('Site Assets')}/drive?$select=id`);
+      if (!d?.id) throw new Error("Couldn't find the site's Site Assets library.");
+      return d.id;
+    })().catch(e => { delete this.assetDrives[siteId]; throw e; });
+    const driveId = await this.assetDrives[siteId], out = [];
+    for (const p of pics) {
+      const name = `pic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+      const up = await API.g(`/drives/${driveId}/root:/Messages/${listId}/${name}:/content`, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: p.blob });
+      out.push(up.webUrl);
+    }
+    return out;
+  },
+  draftKey(kind, parent = '') { return `${this.selected}:${kind}:${parent}`; },
+  form(kind, parent = '') {
+    const draft = this.drafts[this.draftKey(kind, parent)] || {};
+    const contact = kind === 'contact';
+    return `<form class="panel pad comm-form" data-kind="${kind}" data-parent="${esc(parent)}">
+      <h2>${contact ? 'Contact your leaders privately' : parent ? 'Write a reply' : 'Make a post'}</h2>
+      ${!parent ? `<div class="field"><label for="comm-title">${contact ? 'Subject' : 'Title'}</label><input id="comm-title" name="title" maxlength="120" value="${esc(draft.title || '')}" required></div>` : ''}
+      <div class="field"><label for="comm-body">${parent ? 'Reply' : 'Message'}</label>${commToolbar('comm-body')}<div class="panel notes notes-editor" id="comm-body" contenteditable="true" role="textbox" aria-multiline="true" aria-label="${parent ? 'Reply' : 'Message'}">${cleanHtml(draft.body || '')}</div></div>
+      ${contact ? '' : this.picField(kind, parent)}
+      ${contact ? '<p class="hint">Your message is private to you and this space’s leaders. Authorized site administrators retain access.</p>' : '<p class="hint">Visible to members of this board.</p>'}
+      <button class="btn primary" type="submit" ${this.busy ? 'disabled' : ''}>${this.busy ? 'Sending…' : contact ? 'Send private message' : parent ? 'Post reply' : 'Post message'}</button>
+    </form>`;
+  },
+  async resolveAuthors(rows) {
+    const authors = [...new Set(rows.filter(r => !r.email && r.authorId).map(r => r.authorId))];
+    const emails = new Map(await Promise.all(authors.map(async id => { try { const u = await API.g(`/users/${encodeURIComponent(id)}?$select=mail,userPrincipalName`); return [id,lc(u.mail || u.userPrincipalName)]; } catch (_) { return [id,'']; } })));
+    rows.forEach(r => { if (!r.email) r.email = emails.get(r.authorId) || ''; });
+  },
+  own(r) { return !!S.me && (!!this.meId && r.authorId === this.meId || !!r.email && S.me.emails.map(lc).includes(lc(r.email))); },
+  adminEmails(t = this.space()) { return [...(t?.editors || []), ...(this.extraAdmins[t?.key] || [])].map(lc); },
+  isAdmin() { return DEMO || !!S.me?.emails.some(e => this.adminEmails().includes(lc(e))); },
+  async loadAdminEmails(t, siteId) {
+    if (t.key === 'serve') return;
+    this.extraAdmins[t.key] = [];
+    try {
+      const drives = await API.g(`/sites/${siteId}/drives?$select=id,name,webUrl`);
+      const drive = drives.value?.find(x => /\/SiteAssets$/i.test(x.webUrl || '') || /site assets/i.test(x.name || ''));
+      if (!drive) return;
+      const list = await API.g(`/drives/${drive.id}/root:/app/admins.json:/content`);
+      this.extraAdmins[t.key] = Array.isArray(list) ? list.map(lc) : [];
+    } catch (_) { /* Built-in administrators remain available if the optional roster cannot be read. */ }
+  },
+  metadata(r) { return /^(pin:|hide:)/.test(r.parent); },
+  board(d = this.data[this.selected]) { return (d?.board || []).filter(r => !this.metadata(r)); },
+  hidden(id, d = this.data[this.selected], key = this.selected) {
+    const admins = this.adminEmails(this.space(key));
+    const events = (d?.board || []).filter(r => r.parent === 'hide:' + id && (admins.includes(lc(r.email)) || DEMO && this.own(r)) && ['hide','show'].includes(r.text));
+    events.sort((a,b) => b.at.localeCompare(a.at) || String(b.id).localeCompare(String(a.id),undefined,{numeric:true}));
+    return events[0]?.text === 'hide';
+  },
+  hiddenRow(r,d,key = this.selected) { return this.hidden(r.id,d,key) || !!r.parent && this.hidden(r.parent,d,key); },
+  visibleBoard(d = this.data[this.selected]) { return this.board(d).filter(r => this.isAdmin() && this.showHidden || !this.hiddenRow(r,d)); },
+  canChange(r,kind) { return this.own(r) || kind === 'board' && this.moderationReady && this.isAdmin(); },
+  roots(d = this.data[this.selected]) {
+    const rows = this.visibleBoard(d), roots = rows.filter(r => !r.parent), ids = new Set(roots.map(r => r.id));
+    for (const r of rows) if (r.parent && !ids.has(r.parent)) { ids.add(r.parent); roots.push({id:r.parent,parent:'',title:'Deleted conversation',text:'The original message was deleted.',name:'',email:'',at:r.at,deleted:true}); }
+    return roots;
+  },
+  pinned(id, d = this.data[this.selected]) {
+    if (!this.board(d).some(r => r.id === id && !r.parent) || this.hidden(id,d)) return false;
+    const admins = this.adminEmails();
+    const events = (d?.board || []).filter(r => r.parent === 'pin:' + id && (admins.includes(lc(r.email)) || DEMO && this.own(r)) && ['pin','unpin'].includes(r.text));
+    events.sort((a,b) => b.at.localeCompare(a.at) || String(b.id).localeCompare(String(a.id),undefined,{numeric:true}));
+    return events[0]?.text === 'pin';
+  },
+  icon(name) { const paths = {edit:'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z',delete:'M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6',pin:'m16 3 5 5-4 1-3 5v3l-3-3-7 7 7-7-4-3h3l5-3Z',hide:'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12ZM9 12a3 3 0 1 0 6 0 3 3 0 0 0-6 0M3 3l18 18'}; return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name]}"/></svg>`; },
+  reactionRows(id) {
+    const latest = new Map();
+    for (const event of this.data[this.selected]?.board || []) {
+      const author = event.authorId || event.email;
+      if (event.parent !== REACTION_PARENT + id || !author ||
+          (event.text !== 'clear' && !Object.hasOwn(BOARD_REACTIONS, event.text))) continue;
+      const previous = latest.get(author);
+      if (!previous || event.at > previous.at ||
+          (event.at === previous.at && event.id.localeCompare(previous.id, undefined, {numeric:true}) > 0)) {
+        latest.set(author, event);
+      }
+    }
+    return [...latest.values()].filter(event => event.text !== 'clear');
+  },
+  reactions(r, kind = 'board') {
+    if (kind !== 'board' || r.deleted || this.hiddenRow(r)) return '';
+    const rows = this.reactionRows(r.id);
+    const mine = rows.find(event => this.own(event))?.text;
+    const disabled = this.busy || S.imp ? ' disabled' : '';
+    return `<div class="comm-reactions" role="group" aria-label="Message reactions">${Object.entries(BOARD_REACTIONS).map(([key, [emoji, label]]) => {
+      const count = rows.filter(event => event.text === key).length;
+      return `<button type="button" class="btn" data-comm="react" data-id="${esc(r.id)}" data-reaction="${key}" aria-label="${label}, ${count} ${count === 1 ? 'reaction' : 'reactions'}" aria-pressed="${mine === key}"${disabled}><span aria-hidden="true">${emoji}${count ? ' ' + count : ''}</span></button>`;
+    }).join('')}</div>`;
+  },
+  async react(id, reaction) {
+    if (this.busy || S.imp || this.mode !== 'board' || !S.me || !this.space() ||
+        !Object.hasOwn(BOARD_REACTIONS, reaction)) return;
+    const d = this.data[this.selected];
+    const r = this.board(d).find(post => post.id === id);
+    if (!r || this.hiddenRow(r, d)) return;
+    const base = this.meta[this.selected]?.board;
+    if (!DEMO && !base) return;
+    const current = this.reactionRows(id).find(event => this.own(event))?.text;
+    const fields = {Title:'Board reaction', Body:current === reaction ? 'clear' : reaction, ParentId:REACTION_PARENT + id};
+    this.generation++;
+    this.busy = true;
+    render();
+    try {
+      const event = DEMO
+        ? {id:'demo-reaction-' + (this.reactionSerial = (this.reactionSerial || 0) + 1), at:new Date().toISOString()}
+        : this.normalize(await API.g(base, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({fields})}));
+      d.board.push({...event, parent:fields.ParentId, text:fields.Body,
+        authorId:event.authorId || this.meId, email:event.email || S.me.emails[0]});
+    } catch (_) {
+      toast('Could not save your reaction. Try again.', true);
+    } finally {
+      this.busy = false;
+      render();
+    }
+  },
+  actions(r, kind) {
+    if (r.deleted) return '';
+    const button = (action,label,pressed) => `<button type="button" class="iconbtn" data-comm="${action}" data-kind="${kind}" data-id="${esc(r.id)}" aria-label="${label}" title="${label}"${pressed == null ? '' : ` aria-pressed="${pressed}"`}${this.busy ? ' disabled' : ''}>${this.icon(action)}</button>`;
+    return `<div class="comm-actions">${this.canChange(r,kind) ? button('edit','Edit message') + button('delete','Delete message') : ''}${kind === 'board' && !r.parent && this.isAdmin() ? button('pin',this.pinned(r.id) ? 'Unpin message' : 'Pin message',this.pinned(r.id)) : ''}${kind === 'board' && this.isAdmin() ? button('hide',this.hidden(r.id) ? 'Show message' : 'Hide message',this.hidden(r.id)) : ''}</div>`;
+  },
+  editForm(r, kind) {
+    const edit = this.edit;
+    if (!edit || edit.id !== r.id || edit.kind !== kind) return '';
+    return `<form class="comm-edit-form"><h3>Edit message</h3>${!r.parent ? `<div class="field"><label for="comm-edit-title">${kind === 'contacts' ? 'Subject' : 'Title'}</label><input id="comm-edit-title" name="title" maxlength="120" value="${esc(edit.title)}" required></div>` : ''}<div class="field"><label for="comm-edit-body">Message</label>${commToolbar('comm-edit-body')}<div class="panel notes notes-editor" id="comm-edit-body" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Message">${cleanHtml(edit.text)}</div></div><div class="comm-edit-buttons"><button class="btn primary" type="submit" ${this.busy ? 'disabled' : ''}>Save changes</button><button class="btn" type="button" data-comm="cancel-edit">Cancel</button></div></form>`;
+  },
+  async fresh(kind, id) {
+    const base = this.meta[this.selected]?.[kind];
+    if (!base) throw new Error('Refresh messages and try again.');
+    const raw = await API.g(`${base}/${encodeURIComponent(id)}?$expand=fields($select=Title,Body,ParentId)`);
+    const row = this.normalize(raw);
+    if (!this.canChange(row,kind)) throw new Error('You do not have permission to change this message.');
+    return {base,row};
+  },
+  async act(action, kind, id) {
+    if (this.busy || !this.space() || !['board','contacts'].includes(kind)) return;
+    const d = this.data[this.selected], r = d?.[kind]?.find(x => x.id === id);
+    if (!r || this.metadata(r)) return;
+    if (action === 'pin' || action === 'hide') {
+      if (kind !== 'board' || action === 'pin' && r.parent || !this.isAdmin()) return;
+      this.generation++; this.busy = true; render();
+      try {
+        const text = action === 'pin' ? this.pinned(id,d) ? 'unpin' : 'pin' : this.hidden(id,d) ? 'show' : 'hide';
+        const fields = {Title:action === 'pin' ? 'Board pin' : 'Message visibility',Body:text,ParentId:action+':'+id};
+        let event;
+        if (DEMO) event = {id:'demo-pin-'+String(this.pinSerial = (this.pinSerial || 0) + 1).padStart(8,'0'),title:fields.Title,text,parent:fields.ParentId,at:new Date().toISOString(),name:S.me.name,email:S.me.emails[0],authorId:this.meId};
+        else { const raw = await API.g(this.meta[this.selected].board,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields})}); event = {...this.normalize(raw),title:fields.Title,text,parent:fields.ParentId,email:S.me.emails[0],authorId:this.meId}; }
+        d.board.push(event); if (text === 'hide' && this.thread === id) this.thread = ''; toast(({pin:'Message pinned.',unpin:'Message unpinned.',hide:'Message hidden from the board.',show:'Message restored.'})[text]);
+      } catch (_) { toast('Could not update the message. Please try again.',true); }
+      finally { this.busy = false; render(); }
+      return;
+    }
+    if (!this.canChange(r,kind)) return;
+    if (action === 'edit') { this.edit = {kind,id,title:r.title,text:r.text,etag:r.etag}; render(); return; }
+    if (action !== 'delete' || !confirm('Delete this message? Other people’s replies will remain.')) return;
+    this.generation++; this.busy = true; render();
+    try {
+      if (!DEMO) { const {base,row} = await this.fresh(kind,id); await API.g(`${base}/${encodeURIComponent(id)}`,{method:'DELETE',headers:row.etag ? {'If-Match':row.etag} : {}}); }
+      d[kind] = d[kind].filter(x => x.id !== id); this.edit = null;
+      if (this.thread === id && !d.board.some(x => x.parent === id)) this.thread = '';
+      toast('Message deleted.');
+    } catch (_) { toast('Could not delete the message. Refresh and try again.',true); }
+    finally { this.busy = false; render(); }
+  },
+  async saveEdit() {
+    const edit = this.edit;
+    if (this.busy || !edit || !this.space()) return;
+    const d = this.data[this.selected], r = d?.[edit.kind]?.find(x => x.id === edit.id);
+    if (!r || !this.canChange(r,edit.kind)) return;
+    const text = cleanHtml(edit.text || '').trim(), title = edit.title.trim(), plain = commPreview(text);
+    if (!r.parent && (!title || title.length > 120)) { toast(!title ? 'Enter a title.' : 'Title is too long.', true); return; }
+    if (!plain || plain.length > 4000 || text.length > 20000) { toast(!plain ? 'Write a message first.' : 'Message is too long.', true); return; }
+    this.generation++; this.busy = true; render();
+    try {
+      if (!DEMO) { const {base,row} = await this.fresh(edit.kind,edit.id); if (edit.etag && row.etag && edit.etag !== row.etag) throw new Error('Message changed elsewhere.'); await API.g(`${base}/${encodeURIComponent(edit.id)}/fields`,{method:'PATCH',headers:{'Content-Type':'application/json',...(row.etag ? {'If-Match':row.etag} : {})},body:JSON.stringify({Title:r.parent ? r.title : title,Body:text})}); }
+      r.title = r.parent ? r.title : title; r.text = text; this.edit = null; toast('Message updated.');
+    } catch (_) { toast('Could not save your changes. Your edit is still here. Please try again.',true); }
+    finally { this.busy = false; render(); }
+  },
+  record(r, kind = 'board') { return `<div class="comm-record"><div class="comm-record-head"><div><b>${esc(r.name)}</b><time class="hint">${esc(r.at ? new Date(r.at).toLocaleString() : '')}</time></div>${this.actions(r,kind)}</div>${kind === 'board' && this.hiddenRow(r) ? '<span class="hint comm-hidden-label">Hidden from the board</span>' : ''}${this.edit?.id === r.id && this.edit?.kind === kind ? this.editForm(r,kind) : `<div class="comm-text notes">${cleanHtml(r.text)}</div>`}${this.reactions(r,kind)}</div>`; },
+  view() {
+    const spaces = this.spaces(), t = this.space();
+    if (!t) return '<h1 class="page">Messages</h1><div class="empty">Your boards will appear after your ministry access is confirmed.</div>';
+    const d = this.data[t.key], privateOn = DEMO || this.privateReady[t.key];
+
+    let content = '';
+    if (!d) content = '<div class="empty">Loading messages…</div>';
+    else if (this.mode === 'contact') {
+      content = !privateOn ? '<div class="panel pad">Private messaging is awaiting secure setup. Please contact your ministry leader directly for now.</div>' : (d.contactError ? `<div class="err">${esc(d.contactError)}</div>` : this.form('contact') + `<h2>Private messages</h2><p class="hint">Your submissions appear here. Leaders see the submissions they are authorized to read.</p>` + (d.contacts.length ? d.contacts.slice().sort((a,b) => b.at.localeCompare(a.at)).map(r => `<article class="panel pad"><h3>${esc(r.title)}</h3>${this.record(r,'contacts')}</article>`).join('') : '<div class="empty">No private messages yet.</div>'));
+    } else if (d.error) content = `<div class="err">${esc(d.error)}</div>`;
+    else if (this.thread) {
+      const root = this.roots(d).find(r => r.id === this.thread);
+      content = root ? `<button class="btn" data-comm="back">Back to conversations</button><article class="panel pad"><h2>${this.pinned(root.id,d) ? '📌 ' : ''}${esc(root.title)}</h2>${this.record(root)}${this.visibleBoard(d).filter(r => r.parent === root.id).sort((a,b) => a.at.localeCompare(b.at)).map(r => this.record(r)).join('')}</article>${this.form('reply',root.id)}` : '<div class="empty">This conversation is no longer available.</div>';
+    } else {
+      const roots = this.roots(d), seen = this.markShown(t.key, roots);
+      const activity = r => this.board(d).filter(x => x.id === r.id || x.parent === r.id).reduce((at,x) => x.at > at ? x.at : at,r.at);
+      const composer = CommBlast.view() + `<button type="button" class="btn comm-compose-toggle" data-comm="toggle-compose" aria-expanded="${this.composeOpen}">${this.composeOpen ? '− Hide' : '+ Make a post'}</button>` + (this.composeOpen ? this.form('post') : '');
+      content = `<div class="comm-board" data-space="${esc(t.key)}" hidden></div>` + composer + (roots.length ? roots.sort((a,b) => Number(this.pinned(b.id,d)) - Number(this.pinned(a.id,d)) || activity(b).localeCompare(activity(a))).map(r => {
+        const replies = this.visibleBoard(d).filter(x => x.parent === r.id), fresh = [r,...replies].some(x => (!seen.has(x.id) || this.newOnVisit.has(x.id)) && !this.own(x));
+        return `<article class="panel pad"><div class="comm-topic-line"><button class="btn comm-topic" data-comm="thread" data-id="${esc(r.id)}">${this.pinned(r.id,d) ? '📌 ' : ''}${esc(r.title)}${fresh ? ' • New' : ''}</button>${this.actions(r,'board')}</div>${this.hiddenRow(r,d) ? '<span class="hint comm-hidden-label">Hidden from the board</span>' : ''}${this.edit?.id === r.id && this.edit?.kind === 'board' ? this.editForm(r,'board') : ''}<p class="hint">${esc(r.name)} · ${communicationPlural(replies.length,'reply','replies')}</p><div class="comm-text notes">${cleanHtml(r.text)}</div>${this.reactions(r)}</article>`;
+      }).join('') : '<div class="empty">No conversations yet. Start the first one.</div>');
+    }
+    return `<div class="comm"><div class="comm-head"><h1 class="page">Messages</h1><button class="iconbtn" data-comm="refresh" aria-label="Refresh messages" title="Refresh messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 14.9-5L23 10M1 14l4.6 6A9 9 0 0 0 20.5 15"/></svg></button></div><div class="chiprow"><button class="chipcheck" data-comm="mode" data-mode="board" aria-pressed="${this.mode === 'board'}">Team board</button><button class="chipcheck" data-comm="mode" data-mode="contact" aria-pressed="${this.mode === 'contact'}">Contact leaders privately</button>${this.mode === 'board' && this.isAdmin() ? `<button class="chipcheck" data-comm="toggle-hidden" aria-pressed="${this.showHidden}">${this.showHidden ? 'Hide hidden messages' : 'Show hidden messages'}</button>` : ''}${CommBlast.chip()}</div>${content}</div>`;
+  },
+  async send(form) {
+    if (this.busy) return;
+    const t = this.space(), kind = form.dataset.kind, parent = form.dataset.parent || '';
+    if (!t || !['contact','post','reply'].includes(kind)) return;
+    const data = new FormData(form), title = String(data.get('title') || '').trim();
+    const edInput = form.querySelector('#comm-body'), body = cleanHtml(edInput ? edInput.innerHTML : '').trim(), plain = commPreview(body);
+    if (!parent && (!title || title.length > 120)) { toast(!title ? 'Enter a title.' : 'Title is too long.', true); return; }
+    const picKey = this.draftKey(kind,parent), pics = kind === 'contact' ? [] : (this.pics[picKey] || []);
+    if ((!plain && !pics.length) || plain.length > 4000 || body.length > 20000) { toast(!plain && !pics.length ? 'Write a message or add a picture first.' : 'Message is too long.', true); return; }
+    const d = this.data[t.key], contact = kind === 'contact';
+    if (!d || (contact ? !(DEMO || this.privateReady[t.key]) || d.contactError : d.error)) return;
+    if (kind === 'reply' && !this.roots(d).some(r => r.id === parent)) return;
+    this.generation++; this.busy = true; const key = this.draftKey(kind,parent); render();
+    try {
+      let fullBody = body;
+      if (pics.length && !DEMO) {
+        const picBase = this.meta[t.key]?.board; if (!picBase) throw new Error('This space is not ready. Refresh and try again.');
+        let links; try { links = await this.uploadPics(picBase, pics); } catch (e) { e.picFail = true; throw e; }
+        fullBody = body + links.map(u => `<p><a href="${esc(u)}">📷 Picture</a></p>`).join('');
+      }
+      const fields = { Title: title || 'Reply', Body: fullBody, ParentId: parent };
+      let r;
+      if (DEMO) r = { id: 'demo-' + crypto.randomUUID(), parent, title: fields.Title, text: fullBody, name: S.me.name, email: S.me.emails[0], authorId: this.meId, at: new Date().toISOString() };
+      else {
+        const base = this.meta[t.key]?.[contact ? 'contacts' : 'board']; if (!base) throw new Error('This space is not ready. Refresh and try again.');
+        r = this.normalize(await API.g(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields }) }));
+        // Some Graph responses omit expanded fields; use the submitted plain text.
+        Object.assign(r, { parent, title: fields.Title, text: fullBody, name: S.me.name, email: S.me.emails[0], authorId: this.meId });
+      }
+      d[contact ? 'contacts' : 'board'].push(r); delete this.drafts[key]; (this.pics[picKey] || []).forEach(p => URL.revokeObjectURL(p.url)); delete this.pics[picKey];
+      if (!contact) { this.thread = parent || r.id; this.markThread(); }
+      toast(DEMO ? 'Saved in this demo only.' : contact ? 'Private message sent to your leaders.' : 'Message posted.');
+    } catch (e) { toast(e?.picFail ? 'Your picture could not be uploaded, so nothing was posted. Your draft is still here; please try again.' : 'Your message could not be sent. Your draft is still here; please try again.',true); }
+    finally { this.busy = false; render(); }
+  }
+};
+document.addEventListener('input', e => {
+  if (e.target.closest('.comm-edit-form') && Comm.edit) { const form = e.target.closest('.comm-edit-form'), title = form.querySelector('#comm-edit-title'), ed = form.querySelector('#comm-edit-body'); Comm.edit.title = String(title ? title.value : ''); Comm.edit.text = ed ? ed.innerHTML : ''; return; }
+  const form = e.target.closest('.comm-form'); if (!form) return;
+  const title = form.querySelector('#comm-title'), ed = form.querySelector('#comm-body');
+  Comm.drafts[Comm.draftKey(form.dataset.kind,form.dataset.parent)] = { title: String(title ? title.value : ''), body: ed ? ed.innerHTML : '' };
+});
+document.addEventListener('submit', e => { if (e.target.matches('.comm-edit-form')) { e.preventDefault(); Comm.saveEdit(); return; } if (!e.target.matches('.comm-form')) return; e.preventDefault(); Comm.send(e.target); });
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-comm]'); if (!b) return;
+  const action = b.dataset.comm;
+  if (action === 'comm-fmt') {
+    const ed = document.getElementById(b.dataset.target); if (!ed) return;
+    ed.focus();
+    const range = commRanges[b.dataset.target];
+    if (range) { const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range); }
+    const cmd = b.dataset.cmd, val = cmd === 'foreColor' ? (b.dataset.val === 'reset' ? getComputedStyle(ed).color : b.dataset.val) : null;
+    try { document.execCommand('styleWithCSS', false, cmd === 'foreColor'); document.execCommand(cmd, false, val); } catch (_) {}
+    return;
+  }
+  if (Comm.busy) return;
+  if (action === 'pic-remove') { const l = Comm.pics[b.dataset.key]; const [p] = l ? l.splice(Number(b.dataset.i), 1) : []; if (p) URL.revokeObjectURL(p.url); render(); return; }
+  if (action === 'react') { await Comm.react(b.dataset.id, b.dataset.reaction); return; }
+  if (['edit','delete','pin','hide'].includes(action)) { await Comm.act(action,b.dataset.kind,b.dataset.id); return; }
+  if (action === 'toggle-hidden' && Comm.isAdmin()) { Comm.showHidden = !Comm.showHidden; Comm.thread = ''; Comm.edit = null; }
+  if (action === 'cancel-edit') Comm.edit = null;
+  if (action === 'space') { if (!Comm.space(b.dataset.key)) return; Comm.selected = b.dataset.key; Comm.thread = ''; Comm.edit = null; Comm.showHidden = false; Comm.composeOpen = false; }
+  if (action === 'mode') { Comm.mode = b.dataset.mode; Comm.thread = ''; Comm.edit = null; Comm.showHidden = false; Comm.composeOpen = false; }
+  if (action === 'back') { Comm.thread = ''; Comm.composeOpen = false; }
+  if (action === 'toggle-compose') { Comm.composeOpen = !Comm.composeOpen; if (Comm.composeOpen) CommBlast.open = false; }
+  if (action === 'thread') { Comm.thread = b.dataset.id; Comm.markThread(); }
+  if (action === 'refresh') { Comm.edit = null; b.disabled = true; await Comm.load(); }
+  render();
+});
+
+// Keep badges current while the app is open; do not interrupt an active composer.
+let communicationRefreshBusy = false;
+async function refreshCommunications(){
+  if (DEMO || S.phase !== 'ready' || S.loading || Comm.busy || communicationRefreshBusy || document.hidden || document.activeElement?.closest('.comm-form,.comm-edit-form,.comm-blast-form')) return;
+  communicationRefreshBusy = true;
+  try {
+    await Comm.load();
+    if (S.view === 'messages' && Comm.mode === 'board' && Comm.thread) Comm.markThread();
+    if (S.phase === 'ready' && !Comm.busy && !document.activeElement?.closest('.comm-form,.comm-edit-form,.comm-blast-form')) render();
+  } catch (_) { /* Retry on the next interval; list-specific failures are shown in Messages. */ }
+  finally { communicationRefreshBusy = false; }
+}
+setInterval(refreshCommunications, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshCommunications(); });
+
+/* ---------- Email All Team Members (admins, Messages page) ----------
+   Admins of the selected space can send one email to everyone on that team. Everyone goes in BCC,
+   so people don't see each other's addresses; the admin is the To address and gets a copy.
+   Recipients: team apps use teamEmailPeople() from index.html (the same people as the Team Directory);
+   the RCI Serve hub uses its rosters (RCI Serve board = Leadership roster).
+   Sending: Microsoft Graph /me/sendMail from the admin's own mailbox (asks once for Mail.Send consent).
+   If that isn't possible (for example a Gmail guest account with no church mailbox), "Open in My Email App"
+   opens the phone's mail app with everyone in BCC, and "Copy Addresses" copies the list. */
+const commBlastN = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+// Graph's sendMail request is limited to 4 MB; base64 adds a third, so files total up to 3 MB.
+const COMM_BLAST_MAX = 3 * 1024 * 1024;
+const CommBlast = {
+  open: false, subject: '', body: '', files: [], busy: false, showList: false, space: '',
+  people(key = Comm.selected) {
+    let raw = null;
+    if (typeof Rosters !== 'undefined' && Rosters?.data) {
+      const rk = key === 'serve' ? 'leadership' : key;
+      if (!Rosters.data[rk]) {
+        if (!Rosters.errors?.[rk] && !Rosters.tasks?.[rk]) Promise.resolve(Rosters.load(rk)).then(() => { if (S.view === 'messages') render(); });
+        return Rosters.errors?.[rk] ? { error: Rosters.errors[rk] } : null;
+      }
+      raw = Rosters.data[rk].map(p => ({ name: p.name || '', email: p.email || (p.emails || [])[0] || '' }));
+    } else if (typeof teamEmailPeople === 'function') raw = teamEmailPeople();
+    else return { error: 'The team list is not available in this app.' };
+    const seen = new Set(), list = [], missing = [];
+    for (const p of raw) {
+      const em = lc(String(p.email || '').trim());
+      if (!/^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(em)) { if (p.name) missing.push(p.name); continue; }
+      if (seen.has(em)) continue;
+      seen.add(em); list.push({ name: p.name || em, email: em });
+    }
+    list.sort((a,b) => a.name.localeCompare(b.name));
+    return { list, missing };
+  },
+  chip() { return this.allowed() ? `<button class="chipcheck" data-comm="blast-toggle" aria-pressed="${this.open}">Email the Team</button>` : ''; },
+  size(n) { return n >= 1048576 ? (n/1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n/1024)) + ' KB'; },
+  async addFiles(files) {
+    for (const f of files) {
+      const total = this.files.reduce((n,x) => n + x.size, 0);
+      if (total + f.size > COMM_BLAST_MAX) { toast(`${f.name} is too big. Attachments can be up to ${this.size(COMM_BLAST_MAX)} in total.`, true); continue; }
+      try {
+        const b64 = await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(String(fr.result).split(',')[1] || ''); fr.onerror = no; fr.readAsDataURL(f); });
+        this.files.push({ name: f.name, type: f.type, size: f.size, b64 });
+      } catch (_) { toast(`${f.name} could not be read.`, true); }
+    }
+    render();
+  },
+  allowed() { return !S.imp && Comm.mode === 'board' && !Comm.thread && Comm.isAdmin() && !!Comm.space(); },
+  view() {
+    if (!this.allowed()) return '';
+    if (this.space !== Comm.selected) { this.space = Comm.selected; this.open = false; this.showList = false; }
+    const btn = '';
+    if (!this.open) return btn;
+    const t = Comm.space(), r = this.people();
+    let who;
+    if (!r) who = '<p class="hint">Loading the team list…</p>';
+    else if (r.error) who = `<div class="err">${esc(r.error)}</div>`;
+    else who = `<p class="comm-blast-count"><b>To:</b> all ${commBlastN(r.list.length, 'team member', 'team members')} on ${esc(t.full || t.name)}
+        <button type="button" class="linkbtn" data-comm="blast-list" aria-expanded="${this.showList}">${this.showList ? 'Hide names' : 'See names'}</button></p>
+      ${this.showList ? `<div class="comm-blast-names">${r.list.map(p => `<span class="chip">${esc(p.name)}</span>`).join('')}</div>` : ''}
+      ${r.missing.length ? `<p class="hint">Not included (no email address on file): ${esc(r.missing.join(', '))}.</p>` : ''}
+      <p class="hint">Everyone is added as BCC, so they won't see each other's addresses. You'll get a copy too.</p>`;
+    const ready = r && !r.error && r.list.length, dis = this.busy || !ready ? 'disabled' : '';
+    return btn + `<form class="panel pad comm-blast-form">
+      <h2>Email the Team</h2>${who}
+      <div class="field"><label for="comm-blast-subject">Subject</label><input id="comm-blast-subject" name="subject" maxlength="200" value="${esc(this.subject)}" required></div>
+      <div class="field"><label for="comm-blast-body">Message</label>${commToolbar('comm-blast-body')}<div class="panel notes notes-editor" id="comm-blast-body" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Email message">${cleanHtml(this.body || '')}</div></div>
+      <div class="field"><span class="label">Attachments</span>
+        ${this.files.length ? `<div class="comm-blast-files">${this.files.map((f,i) => `<span class="chip">📎 ${esc(f.name)} <small>(${this.size(f.size)})</small> <button type="button" class="linkbtn" data-comm="blast-file-remove" data-i="${i}" aria-label="Remove ${esc(f.name)}">×</button></span>`).join('')}</div>` : ''}
+        <label class="btn comm-pic-add">📎 ${this.files.length ? 'Attach Another File' : 'Attach a Picture or Document'}<input type="file" multiple hidden data-blast-files></label>
+        <p class="hint">Up to ${this.size(COMM_BLAST_MAX)} in total. Attachments go with Send Email to All; with Open in My Email App you'll need to attach them there yourself.</p></div>
+      <div class="comm-edit-buttons">
+        <button class="btn primary" type="submit" ${dis}>${this.busy ? 'Sending…' : 'Send Email to All'}</button>
+        <button class="btn" type="button" data-comm="blast-mailto" ${dis}>Open in My Email App</button>
+        <button class="btn" type="button" data-comm="blast-copy" ${dis}>Copy Addresses</button>
+        <button class="btn" type="button" data-comm="blast-toggle">Cancel</button>
+      </div>
+      <p class="hint">Send Email to All sends from your church Microsoft email. The first time, Microsoft may ask you to allow the app to send email for you.</p>
+    </form>`;
+  },
+  read() {
+    const s = document.getElementById('comm-blast-subject'), b = document.getElementById('comm-blast-body');
+    if (s) this.subject = s.value; if (b) this.body = b.innerHTML;
+  },
+  appName() { return typeof APP_NAME !== 'undefined' ? APP_NAME : 'RCI Serve'; },
+  check() {
+    this.read();
+    const r = this.people(), subject = this.subject.trim(), body = cleanHtml(this.body || '').trim();
+    if (!r || r.error || !r.list.length) { toast('The team list is not ready yet. Refresh and try again.', true); return null; }
+    if (!subject) { toast('Enter a subject.', true); return null; }
+    if (!commPreview(body)) { toast('Write a message first.', true); return null; }
+    return { list: r.list, subject, body };
+  },
+  async token() {
+    const request = { scopes: ['Mail.Send'], account: API.account };
+    try { return (await API.msal.acquireTokenSilent(request)).accessToken; }
+    catch (_) { return (await API.msal.acquireTokenPopup(request)).accessToken; }
+  },
+  async send() {
+    if (this.busy || !this.allowed()) return;
+    const m = this.check(); if (!m) return;
+    if (!confirm(`Send "${m.subject}" to ${commBlastN(m.list.length, 'team member', 'team members')}?`)) return;
+    this.busy = true; render();
+    try {
+      if (DEMO) { toast(`Demo only: this would email ${commBlastN(m.list.length, 'person', 'people')}.`); }
+      else {
+        const me = S.me.emails[0], t = Comm.space();
+        const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5">${m.body}</div><p style="font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#777;margin-top:24px">Sent to the ${esc(t.full || t.name)} team from the ${esc(this.appName())} app.</p>`;
+        const message = { subject: m.subject, body: { contentType: 'HTML', content: html },
+          toRecipients: [{ emailAddress: { address: me, name: S.me.name || '' } }],
+          bccRecipients: m.list.filter(p => !S.me.emails.map(lc).includes(p.email)).map(p => ({ emailAddress: { address: p.email, name: p.name } })),
+          attachments: this.files.map(f => ({ '@odata.type': '#microsoft.graph.fileAttachment', name: f.name, contentType: f.type || 'application/octet-stream', contentBytes: f.b64 })) };
+        const token = await this.token();
+        const res = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ message, saveToSentItems: true }) });
+        if (!res.ok) { const e = new Error(String(res.status)); try { e.code = (await res.json())?.error?.code || ''; } catch (_) {} throw e; }
+        toast(`Email sent to ${commBlastN(m.list.length, 'team member', 'team members')}.`);
+      }
+      this.subject = ''; this.body = ''; this.files = []; this.open = false; this.showList = false;
+    } catch (e) {
+      const noBox = /MailboxNotEnabled|MailboxNotHostedInExchange|ResourceNotFound/i.test(e?.code || '');
+      toast(noBox ? "Your account doesn't have a church email to send from. Use Open in My Email App instead." : 'The email could not be sent. Your message is still here. Try again, or use Open in My Email App.', true);
+    } finally { this.busy = false; render(); }
+  },
+  mailto() {
+    const m = this.check(); if (!m) return;
+    if (this.files.length) toast('Remember to attach your files in your email app.');
+    const plain = commPreview(m.body), me = S.me?.emails?.[0] || '';
+    const bcc = m.list.map(p => p.email).filter(e => e !== lc(me)).join(',');
+    let url = `mailto:${encodeURIComponent(me)}?bcc=${encodeURIComponent(bcc)}&subject=${encodeURIComponent(m.subject)}`;
+    const withBody = url + `&body=${encodeURIComponent(plain)}`;
+    // Some mail apps cut off very long links; leave the message out if it would make the link too long.
+    url = withBody.length <= 8000 ? withBody : url;
+    if (url !== withBody) toast('Your message was too long to pass along; paste it into the email.', true);
+    location.href = url;
+  },
+  async copy() {
+    const r = this.people(); if (!r || r.error || !r.list.length) return;
+    const text = r.list.map(p => p.email).join(', ');
+    try { await navigator.clipboard.writeText(text); toast(`Copied ${commBlastN(r.list.length, 'address', 'addresses')}. Paste them into the BCC line.`); }
+    catch (_) { prompt('Copy these addresses into the BCC line:', text); }
+  }
+};
+(() => { const st = document.createElement('style'); st.textContent = `
+  .comm-blast-toggle{margin:0 8px 10px 0}
+  .comm-blast-form{display:flex;flex-direction:column;gap:10px;margin-bottom:14px}
+  .comm-blast-count{margin:0}
+  .comm-blast-files{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}.comm-blast-files .linkbtn{padding:0 2px;margin:0}
+  .comm-blast-names{display:flex;flex-wrap:wrap;gap:6px}
+  .comm-blast-form .linkbtn{background:none;border:0;padding:0 4px;color:var(--accent,#b8860b);font:inherit;font-weight:600;cursor:pointer;text-decoration:underline}`; document.head.appendChild(st); })();
+document.addEventListener('input', e => { if (e.target.closest('.comm-blast-form')) CommBlast.read(); });
+document.addEventListener('submit', e => { if (!e.target.matches('.comm-blast-form')) return; e.preventDefault(); CommBlast.send(); });
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-comm^="blast-"]'); if (!b || CommBlast.busy) return;
+  const a = b.dataset.comm;
+  if (a === 'blast-mailto') { CommBlast.mailto(); return; }
+  if (a === 'blast-copy') { CommBlast.copy(); return; }
+  if (a === 'blast-file-remove') { CommBlast.read(); CommBlast.files.splice(Number(b.dataset.i), 1); render(); return; }
+  CommBlast.read();
+  if (a === 'blast-toggle') { CommBlast.open = !CommBlast.open; if (CommBlast.open) Comm.composeOpen = false; }
+  if (a === 'blast-list') CommBlast.showList = !CommBlast.showList;
+  render();
+});
+document.addEventListener('change', e => { const i = e.target.closest('input[data-blast-files]'); if (!i) return; const f = [...i.files]; i.value = ''; CommBlast.read(); CommBlast.addFiles(f); });
