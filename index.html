@@ -39,6 +39,28 @@
 .cal-ann-more{display:flex;gap:12px;align-items:flex-start;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
 .cal-ann-more p{flex:1;margin:0;white-space:pre-line;color:var(--muted);font-size:14px}
 .cal-ann-more .flyer{margin-left:auto}
+.c2-name{font-size:16.5px;line-height:1.2;overflow-wrap:anywhere}
+.c2-pos{font-family:var(--display);font-weight:700;font-size:20px;letter-spacing:.02em;color:var(--accent);line-height:1.15;overflow-wrap:anywhere}
+.c2-sub{font-size:12.5px;margin:0}
+.c2-side{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex:none}
+.c2-btns{display:flex;gap:6px}
+.c2-btns .iconbtn{width:36px;height:36px}
+.c2-btns .iconbtn svg{width:17px;height:17px}
+.c2 .iconbtn.save-btn:not(:disabled){background:transparent;border:2px solid var(--accent);color:var(--accent)}
+.admin-row.c2.locked .c2-face .av{opacity:.75}
+.c2-face .av.face{width:58px;height:58px;font-size:18px}
+.c2-namepick{position:relative;display:block;cursor:pointer;line-height:1.25}
+.c2-namepick .c2-name{display:inline}
+.admin-row.c2.locked .c2-namepick{cursor:default}
+.admin-row.c2.locked .c2-dd{display:none}
+.c2-dd{display:inline-grid;vertical-align:-4px;margin-left:4px;place-items:center;width:22px;height:22px;background:none;border:none;box-shadow:none;color:var(--fg);flex:none}
+.c2-dd svg{width:16px;height:16px;transform:rotate(90deg)}
+.c2-dd.inline-dd{display:inline-grid;width:20px;height:20px;vertical-align:-4px}
+.c2-dd.inline-dd svg{width:11px;height:11px}
+.c2-sel{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:16px}
+.c2-sel:disabled{display:none}
+
+.c2-namepick:focus-within{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}
 </style>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -151,7 +173,7 @@ a.btn{text-decoration:none}
 .admin-side{display:flex;flex-direction:row;align-items:center;gap:6px;flex:none}
 .admin-side .iconbtn{width:30px;height:30px}
 .admin-side .iconbtn svg{width:15px;height:15px}
-/* Edit Schedule cards (same layout as Productions; the name is the large gold line) */
+/* Edit Schedule: Productions name picker and position card layout. */
 .admin-row.c2{padding:12px 14px;gap:10px}
 .c2-main{display:flex;align-items:flex-start;gap:12px;min-width:0}
 .c2-face .av.face{width:64px;height:64px;font-size:20px}
@@ -638,6 +660,28 @@ iframe[id^="nl-"],iframe[title="Netlify"],iframe[title*="Netlify"]{display:none!
 .flyer-picked{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
 .flyer-picked img{width:56px;height:70px;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
 .flyer-picked .linkbtn{margin:0}
+.c2-name{font-size:16.5px;line-height:1.2;overflow-wrap:anywhere}
+.c2-pos{font-family:var(--display);font-weight:700;font-size:20px;letter-spacing:.02em;color:var(--accent);line-height:1.15;overflow-wrap:anywhere}
+.c2-sub{font-size:12.5px;margin:0}
+.c2-side{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex:none}
+.c2-btns{display:flex;gap:6px}
+.c2-btns .iconbtn{width:36px;height:36px}
+.c2-btns .iconbtn svg{width:17px;height:17px}
+.c2 .iconbtn.save-btn:not(:disabled){background:transparent;border:2px solid var(--accent);color:var(--accent)}
+.admin-row.c2.locked .c2-face .av{opacity:.75}
+.c2-face .av.face{width:58px;height:58px;font-size:18px}
+.c2-namepick{position:relative;display:block;cursor:pointer;line-height:1.25}
+.c2-namepick .c2-name{display:inline}
+.admin-row.c2.locked .c2-namepick{cursor:default}
+.admin-row.c2.locked .c2-dd{display:none}
+.c2-dd{display:inline-grid;vertical-align:-4px;margin-left:4px;place-items:center;width:22px;height:22px;background:none;border:none;box-shadow:none;color:var(--fg);flex:none}
+.c2-dd svg{width:16px;height:16px;transform:rotate(90deg)}
+.c2-dd.inline-dd{display:inline-grid;width:20px;height:20px;vertical-align:-4px}
+.c2-dd.inline-dd svg{width:11px;height:11px}
+.c2-sel{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:16px}
+.c2-sel:disabled{display:none}
+
+.c2-namepick:focus-within{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}
 </style>
 </head>
 <body>
@@ -680,7 +724,7 @@ const CONFIG = {
 
 const onAppHost = !CONFIG.appHosts || CONFIG.appHosts.some(h => h.startsWith(".") ? location.hostname.endsWith(h) : location.hostname === h);
 // Bump together with CACHE in sw.js whenever the app changes.
-const APP_VERSION = "2";
+const APP_VERSION = "3";
 const DEMO = !CONFIG.clientId || /[?&]demo\b/.test(location.search) || !onAppHost;
 const SCOPES = ["User.Read", "User.ReadBasic.All", "Sites.ReadWrite.All"];
 
@@ -767,7 +811,7 @@ function normalize(id, f, emailById){
     editable: roster,
     pendingEmail: /@/.test(f.Title || "") ? String(f.Title).trim() : "",
     archived: lc(f.ArchiveStatus) === "archive",
-    active: f.ActiveStatus || "",
+    active: f.ActiveStatus || "", ministryLeader: f.Ministry_x0020_Leader === true || f.MinistryLeader === true,
     gone: lc(f.ArchiveStatus) === "archive"
   };
 }
@@ -1494,6 +1538,7 @@ function viewCalendar(){
       <div class="grid7">${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(x=>`<div class="dowh">${x}</div>`).join("")}${cells}</div>
     </section>
     <section><div class="day-h"><h2 class="section-label">${esc(fmtLong(sel))}${cats.length ? ` <span class="day-cat">${esc(cats.join(" / "))}</span>` : ""}</h2>
+        ${myProfile() ? `<button class="iconbtn notes-btn" data-act="abs-open" data-date="${sel}" aria-label="Report Time Off for this day" title="Report Time Off">${ICON.away}</button>` : ""}
         ${isEditor() ? `<button class="iconbtn notes-btn" data-act="admin-open" data-date="${sel}" aria-label="Edit this day's schedule" title="Edit schedule">${ICON.pencil}</button>` : ""}</div>
       ${ev.none ? `<div class="no-service"><span aria-hidden="true">❌</span> No Service</div>` : ""}
       ${ev.n.length ? `<div class="cal-anns">${ev.n.map(calAnnCard).join("")}</div>` : ""}
@@ -1556,11 +1601,11 @@ function absState(){
 }
 function viewAbsence(){
   const p = myProfile(), A = absState();
-  if (S.absenceDone) return `<div class="page-h"><h1>Time Off</h1></div>
+  if (S.absenceDone) return `${backBar("Time Off")}
     <div class="panel done"><span class="check">${ICON.check}</span><h2 style="font-family:var(--display);font-size:26px;margin:0">Absence Submitted</h2>
     <p class="sub" style="margin:0">${A.sent.map(k => esc(fmtShort(k))).join(" · ")}</p>
     <p class="sub" style="margin:0">The schedule team will plan around it.</p><button class="btn" data-act="absence-again">Submit More Dates</button></div>`;
-  if (!p) return `<div class="page-h"><h1>Time Off</h1></div>${noProfileMsg()}`;
+  if (!p) return `${backBar("Time Off")}${noProfileMsg()}`;
   const m = A.month, t = todayKey();
   const first = new Date(m.getFullYear(), m.getMonth(), 1);
   const dim = new Date(m.getFullYear(), m.getMonth()+1, 0).getDate();
@@ -1573,7 +1618,7 @@ function viewAbsence(){
   }
   const picked = [...A.sel].sort();
   const thisMonth = m.getFullYear() === new Date().getFullYear() && m.getMonth() === new Date().getMonth();
-  return `<div class="page-h"><h1>Time Off</h1></div>
+  return `${backBar("Time Off")}
     <p class="sub" style="margin-top:-10px">Tap every day you can't serve. If your plans change, come back and send more dates.</p>
     <form class="panel stack" id="absenceForm">
       <div class="field"><span class="label">Dates of Absence</span>
@@ -1592,9 +1637,10 @@ const fmtBday = k => k ? fromKey(k).toLocaleDateString(undefined, {month:"long",
 function teamEmailPeople(){
   return S.items.filter(p => isProfile(p) && p.editable && !p.gone).map(p => ({ name: p.fullName || "", email: p.email || p.pendingEmail || "" }));
 }
+const directoryVisible = p => ![p.email, p.pendingEmail].filter(Boolean).some(e => lc(e) === "ashley.stmacary@therampchurch.com") && lc(p.fullName || "").replace(/[.]/g, "").trim() !== "ashley st macary";
 function viewDirectory(){
   // Only Roster rows (no Service Date / Service Category / Call Time) — the list's Roster view.
-  const people = S.items.filter(p => isProfile(p) && p.editable && !p.gone && lc(p.active) !== "non active").sort((a,b) => (a.fullName||"").localeCompare(b.fullName||""));
+  const people = S.items.filter(p => isProfile(p) && p.editable && !p.gone && directoryVisible(p) && lc(p.active) !== "non active").sort((a,b) => Number(!!b.ministryLeader) - Number(!!a.ministryLeader) || (a.fullName||"").localeCompare(b.fullName||""));
   return `<div class="page-h"><h1>Team Directory</h1></div>
     ${isEditor() ? newPersonForm() : ""}
     <p class="sub" style="margin-top:-10px">${people.length} team members</p>
@@ -1802,12 +1848,9 @@ function adminFixedPositions(k, rows){
   return `<section class="panel stack"><h2 class="section-label" style="margin:0">${wed ? "Wednesday Team" : "Positions"}</h2>
     <p class="sub">${6 - openings.length} of 6 positions filled. Front door · Lobby greeter ×2 · Ipad position ×2 · Guest Cards.</p>
     ${wed ? `<p class="sub">Preload greeters who accepted a placement on ${esc(fmtLong(plan.source))}. Unavailable greeters are skipped. Existing assignments stay in place; new requests need a fresh reply.</p>
-    ${plan.assignments.length ? `<details><summary>Review Sunday team (${plan.assignments.length})</summary><ul>${plan.assignments.map(x => `<li>${esc(x.role)}: ${esc(x.p.fullName)}</li>`).join("")}</ul></details>` : `<p class="hint">${openings.length ? "No eligible Sunday greeters to add. Fill open positions below." : "All six positions are filled."}</p>`}
+    ${plan.assignments.length ? `<details><summary>Review Sunday team (${plan.assignments.length})</summary><ul>${plan.assignments.map(x => `<li>${esc(x.role)}: ${esc(x.p.fullName)}</li>`).join("")}</ul></details>` : `<p class="hint">${openings.length ? "No eligible Sunday greeters to add. Choose a name on an open position below." : "All six positions are filled."}</p>`}
     ${plan.skipped.length ? `<p class="hint">Skipped unavailable or inactive greeters: ${plan.skipped.map(p => esc(p.fullName)).join(", ")}.</p>` : ""}
     <button class="btn blue" type="button" data-act="preload-sunday" data-date="${k}" ${S.scheduleBusy || !plan.assignments.length ? "disabled" : ""}>${S.scheduleBusy ? "Saving…" : "Preload Sunday Team"}</button>` : ""}
-    ${openings.map(x => `<form class="stack greeter-opening" data-date="${k}" data-role="${esc(x.role)}"><label for="slot-${x.index}">${esc(x.role)}${x.role === "Lobby greeter" ? ` ${x.index}` : x.role === "Ipad position" ? ` ${x.index - 2}` : ""} · Open</label>
-    <select id="slot-${x.index}" name="person" required ${S.scheduleBusy ? "disabled" : ""}><option value="">Choose an available greeter</option>${available.map(p => `<option value="${esc(p.id)}">${esc(p.fullName)}</option>`).join("")}</select>
-    <button class="btn" type="submit" ${S.scheduleBusy || !available.length ? "disabled" : ""}>Assign &amp; Send Request</button></form>`).join("")}
     ${openings.length && !available.length ? `<p class="hint">No available unscheduled greeters. You can review existing assignments below.</p>` : ""}</section>`;
 }
 /* Inline "Delete this position?" check on an Edit Schedule card. */
@@ -1839,22 +1882,38 @@ function viewAdmin(){
   const dayRows = S.items.filter(i => !isProfile(i) && i.date === k && !i.archived);
   const rows = dayRows.filter(i => !isNoService(i)).sort((x, y) => Number(x.id) - Number(y.id));   // same order as the SharePoint list
   const chips = dates.map(d => { const x = fromKey(d); return `<button class="date-chip ${d === k ? "on" : ""}" data-act="admin-date" data-date="${d}" aria-pressed="${d === k}"><span>${x.toLocaleDateString(undefined,{weekday:"short"})}</span><b>${x.getDate()}</b><span>${x.toLocaleDateString(undefined,{month:"short"})}</span></button>`; }).join("");
-  const cards = rows.map(i => {
+  const card = i => {
     const sid = esc(i.id);
     const locked = lc(i.status) === "accepted" && !(S.adminUnlocked || new Set()).has(i.id);
-    const prof = profileOf(i);
+    const prof = profileOf(i), current = rosterPeople().find(p => sameGreeter(p, i));
+    const candidates = rosterPeople().filter(p => sameGreeter(p, i) || (!greeterUnavailable(p, k) && !rows.some(r => r.id !== i.id && sameGreeter(r, p))));
     return `<form class="panel admin-row c2 ${locked ? "locked" : ""}" data-id="${sid}">
       <div class="c2-main"><span class="c2-face">${avatar(prof || i, "face")}</span>
-        <div class="c2-info"><span class="c2-pos">${esc(i.fullName || "No name")}</span><span class="sub c2-sub">${esc([i.category, fmtShort(i.date)].filter(Boolean).join(" · "))}</span></div>
+        <div class="c2-info"><label class="c2-namepick" title="Choose a name"><b class="c2-name" data-nm>${esc(i.fullName || "Not assigned")}</b><span class="c2-dd" aria-hidden="true">${ICON.next}</span>
+          <select class="c2-sel" name="person" data-f="GreeterId" aria-label="Choose a name for ${esc(i.role || "this position")}" ${locked ? "disabled" : ""}>
+          ${!current ? `<option value="current:${sid}">${esc(i.fullName || "Not assigned")}</option>` : ""}${candidates.map(p => `<option value="${esc(p.id)}" ${current?.id === p.id ? "selected" : ""}>${esc(p.fullName)}</option>`).join("")}</select></label>
+          <span class="c2-pos">${esc(i.role || "No position")}</span><span class="sub c2-sub">${esc([i.category, fmtShort(i.date)].filter(Boolean).join(" · "))}</span></div>
         <div class="c2-side">${statusPill(i)}<div class="c2-btns"><button class="iconbtn del-btn" type="button" data-act="del-ask" data-id="${sid}" aria-label="Delete this placement" title="Delete">${ICON.trash}</button>${locked
           ? `<button class="iconbtn notes-btn" type="button" data-act="admin-unlock" data-id="${sid}" aria-label="Edit this placement" title="Edit">${ICON.pencil}</button>`
           : saveIcon(svcFilled(i.role) && lc(i.status) !== "accepted")}</div></div>
       </div>${delAsk(i)}
-      <label class="c2-pub"><span>Placement</span><select id="ad-pl-${sid}" data-f="Placement" ${locked ? "disabled" : ""}>${opts([...new Set([...GREETER_POSITIONS, ...(S.placements || [])])], i.role, "—")}</select></label>
+      <input type="hidden" data-f="Placement" value="${esc(i.role)}">
     </form>`;
+  };
+  const remaining = [...rows], fixed = GREETER_POSITIONS.map((role, index) => {
+    const at = remaining.findIndex(i => lc(i.role) === lc(role));
+    if (at !== -1) return card(remaining.splice(at, 1)[0]);
+    if (dayRows.some(isNoService)) return "";
+    const available = rosterPeople().filter(p => !greeterUnavailable(p, k) && !rows.some(i => sameGreeter(i, p)));
+    const label = role + (role === "Lobby greeter" ? ` ${index}` : role === "Ipad position" ? ` ${index - 2}` : "");
+    return `<form class="panel admin-row c2 greeter-opening" data-date="${k}" data-role="${esc(role)}"><div class="c2-main"><span class="c2-face">${avatar(null, "face")}</span><div class="c2-info">
+      <label class="c2-namepick"><b class="c2-name" data-nm>Not assigned</b><span class="c2-dd" aria-hidden="true">${ICON.next}</span>
+      <select class="c2-sel" name="person" required aria-label="Choose a name for ${esc(label)}" ${S.scheduleBusy ? "disabled" : ""}><option value="">— Not assigned —</option>${available.map(p => `<option value="${esc(p.id)}">${esc(p.fullName)}</option>`).join("")}</select></label>
+      <span class="c2-pos">${esc(label)}</span><span class="sub c2-sub">${esc(fmtShort(k))}</span></div><div class="c2-side"><span class="pill">Open</span>${saveIcon(false)}</div></div></form>`;
   }).join("");
+  const cards = fixed + remaining.map(card).join("");
   return `${backBar("Edit Schedule")}
-    <ol class="panel steps"><li>Choose a date. On Wednesdays, review and preload the preceding Sunday’s team, then fill open positions.</li><li>Choose a placement from the drop down menu.</li><li>Hit the <span class="inline-check" aria-label="check">${ICON.check}</span> to save. A request is sent to the greeter to accept or decline.</li></ol>
+    <ol class="panel steps"><li>Choose a date. On Wednesdays, review and preload the preceding Sunday’s team, then fill open positions.</li><li>Tap a name or the arrow beside it to choose who serves.</li><li>Hit the <span class="inline-check" aria-label="check">${ICON.check}</span> to save. A request is sent to the greeter to accept or decline.</li></ol>
     <div class="date-chips" role="group" aria-label="Service dates">${chips}${adminPickChip()}</div>
     ${adminPickField()}
     ${adminDayHeader(k, dayRows)}
@@ -1862,7 +1921,7 @@ function viewAdmin(){
     ${adminFixedPositions(k, dayRows)}
     <details><summary>Add other team members</summary>${adminTemplate(k, dayRows)}</details>
     <p class="sub" style="margin:-4px 0 0">${rows.length} ${rows.length === 1 ? "person" : "people"} scheduled</p>
-    ${rows.length ? `<div class="list">${cards}</div>` : ""}`;
+    ${cards ? `<div class="list">${cards}</div>` : ""}`;
 }
 
 /* ---------- red badge on the app icon for pending requests ---------- */
@@ -2249,6 +2308,12 @@ document.addEventListener("click", async e => {
     case "flyer-open": if (b.dataset.url) openLightbox(b.dataset.url, b.querySelector("img")?.alt); break;
     case "flyer-toggle": toggleFlyerCollapsed(b.dataset.flyerId); render(); break;
     case "serve-toggle": b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") === "true" ? "false" : "true"); break;
+    case "abs-open": {
+      const k = b.dataset.date; S.abs = null; S.absenceDone = false;
+      const A = absState(); A.month = new Date(fromKey(k).getFullYear(), fromKey(k).getMonth(), 1);
+      if (k >= todayKey()) A.sel = new Set([k]);
+      go("absence", null); break;
+    }
     case "absence-again": S.absenceDone = false; S.abs = null; render(); break;
     case "abs-pick": { const A = absState(), k = b.dataset.date; A.sel.has(k) ? A.sel.delete(k) : A.sel.add(k); render(); break; }
     case "abs-prev": { const A = absState(); A.month = new Date(A.month.getFullYear(), A.month.getMonth()-1, 1); render(); break; }
@@ -2346,9 +2411,12 @@ document.addEventListener("submit", async e => {
     const btn = e.target.querySelector('button[type="submit"]');
     // Like Productions: assigning a placement sends a request (Status Pending); the greeter accepts or declines it.
     // Re-saving an unchanged placement that's still Pending/Declined re-sends the request.
+    const chosen = rosterPeople().find(p => p.id === e.target.querySelector('[data-f="GreeterId"]')?.value);
+    const changedPerson = chosen && !sameGreeter(chosen, item);
+    if (changedPerson && (greeterUnavailable(chosen, item.date) || S.items.some(i => i.id !== item.id && i.date === item.date && !isProfile(i) && !i.archived && sameGreeter(i, chosen)))){ toast("Choose an available greeter who is not already scheduled.", true); return; }
     const status = "Pending";
-    if (placement === item.role && lc(item.status) === "pending"){ btn.disabled = true; return; }
-    const fields = {};
+    if (!changedPerson && placement === item.role && lc(item.status) === "pending"){ btn.disabled = true; return; }
+    const fields = changedPerson ? {SecurityName: chosen.fullName, NameLookupId: chosen.personId ? String(chosen.personId) : null} : {};
     if (placement !== item.role) fields.Placement = placement || null;
     if (lc(item.status) !== lc(status)) fields.Status = status;
     btn.disabled = true; btn.classList.add("busy");
@@ -2356,6 +2424,7 @@ document.addEventListener("submit", async e => {
       if (GREETER_POSITIONS.includes(placement)) await ensureGreeterPositions();
       await API.update(item.id, fields);
       item.role = placement; item.status = status;
+      if (changedPerson) Object.assign(item, {fullName:chosen.fullName, email:chosen.email || "", personId:chosen.personId || ""});
       S.adminUnlocked?.delete(item.id);
       toast(`${svcFilled(placement) ? "Request sent" : "Saved"}: ${item.fullName}, ${placement || "no placement"}, ${fmtShort(item.date)}`); render(); updateBadge();
     } catch(err){ toast("Couldn't save the change. " + err.message, true); btn.disabled = false; btn.classList.remove("busy"); }
@@ -2424,6 +2493,11 @@ document.addEventListener("change", async e => {
   }
   if (e.target.id === "admin-pick"){ if (e.target.value){ S.adminExtra = e.target.value; S.adminDate = e.target.value; S.catEdit = null; S.noSvcAsk = null; S.pickOpen = false; render(); } return; }
   const adRow = e.target.closest(".admin-row");
+  if (adRow && e.target.name === "person"){
+    const p = rosterPeople().find(p => p.id === e.target.value);
+    const label = adRow.querySelector('[data-nm]'); if (label) label.textContent = p?.fullName || "Not assigned";
+    const face = adRow.querySelector('.c2-face'); if (face) face.innerHTML = avatar(p || null, "face");
+  }
   if (adRow){ adRow.querySelector('button[type="submit"]').disabled = false; return; }
   if (e.target.id !== "pf-photo" || !e.target.files[0]) return;
   const p = S.items.find(i => i.id === e.target.dataset.id); if (!p || !p.editable) return;
@@ -2543,7 +2617,7 @@ function managePanel(p){
    to switch them back to Active. */
 function nonActiveSection(){
   if (!isEditor()) return "";
-  const list = S.items.filter(p => isProfile(p) && !p.gone && lc(p.active || "") === "non active").sort((a, b) => (a.fullName || "").localeCompare(b.fullName || ""));
+  const list = S.items.filter(p => isProfile(p) && !p.gone && directoryVisible(p) && lc(p.active || "") === "non active").sort((a, b) => (a.fullName || "").localeCompare(b.fullName || ""));
   const t = p => tile(p, "", "member", p.id);
   return `<details class="archived-sec"><summary class="section-label">Not Active <span class="count">${list.length}</span></summary>
     <p class="sub" style="margin:0 0 8px">Only admins see this. These people are hidden from the Team Directory. Open someone to set them back to Active.</p>
@@ -2560,7 +2634,7 @@ function archivedSection(){
 /* Admin Home: people added with an email who can't sign in yet (the site hasn't been shared with them). */
 function waitingPanel(){
   if (!isEditor()) return "";
-  const list = S.items.filter(p => Onboarding.writable(p) && !p.gone && Onboarding.email(p) && p.accessStatus !== "Complete");
+  const list = S.items.filter(p => Onboarding.writable(p) && !p.gone && directoryVisible(p) && Onboarding.email(p) && p.accessStatus !== "Complete");
   return `<details class="archived-sec"><summary class="section-label">Access to Check <span class="count">${list.length}</span></summary>
     <div class="list">${list.map(p => `<div class="panel wait-row">${avatar(p)}<div class="wait-info"><b>${esc(p.fullName)}</b><span class="sub" style="margin:0">${esc(p.accessStatus || "Pending")}</span></div>
       <button class="btn" data-act="member" data-id="${esc(p.id)}">Open Profile</button></div>`).join("")}</div>
@@ -2568,7 +2642,7 @@ function waitingPanel(){
 }
 function needsEmailPanel(){
   if (!isEditor()) return "";
-  const list = S.items.filter(p => Onboarding.writable(p) && !p.gone && !Onboarding.email(p)).sort((a,b) => (a.fullName || "").localeCompare(b.fullName || ""));
+  const list = S.items.filter(p => Onboarding.writable(p) && !p.gone && directoryVisible(p) && !Onboarding.email(p)).sort((a,b) => (a.fullName || "").localeCompare(b.fullName || ""));
   return `<details class="archived-sec"><summary class="section-label">Needs an Email <span class="count">${list.length}</span></summary>
     <p class="sub">Open a profile and edit their info to add the email they sign in with. Then check their access.</p>
     <div class="list">${list.map(p => `<div class="panel wait-row">${avatar(p)}<div class="wait-info"><b>${esc(p.fullName)}</b><span class="sub">No email yet</span></div><button class="btn" data-act="member" data-id="${esc(p.id)}">Open Profile</button></div>`).join("")}</div></details>`;
