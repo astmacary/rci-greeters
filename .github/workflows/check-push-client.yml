@@ -1,10 +1,10 @@
-name: Check Serve notification consent
+name: Check Greeters scheduling and notification consent
 on:
   pull_request:
-    paths: ['push-client.js', 'test/push-serve.test.cjs', '.github/workflows/check-push-client.yml']
+    paths: ['index.html', 'sw.js', 'push-client.js', 'test/**', '.github/workflows/check-push-client.yml']
   push:
     branches: [main]
-    paths: ['push-client.js', 'test/push-serve.test.cjs', '.github/workflows/check-push-client.yml']
+    paths: ['index.html', 'sw.js', 'push-client.js', 'test/**', '.github/workflows/check-push-client.yml']
 permissions:
   contents: read
 jobs:
@@ -16,4 +16,4 @@ jobs:
         with:
           node-version: '22'
       - run: node --check push-client.js
-      - run: node --test test/push-serve.test.cjs
+      - run: node --test test/*.test.cjs
