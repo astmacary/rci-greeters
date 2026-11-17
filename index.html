@@ -98,9 +98,9 @@ button{cursor:pointer}
 .wrap{max-width:720px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 
 header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--surface);border-bottom:1px solid var(--line)}
-header.top .wrap{display:flex;align-items:center;gap:12px;padding-top:16px;padding-bottom:10px}
+header.top .wrap{display:flex;align-items:center;gap:12px;padding-top:11px;padding-bottom:5px}
 .brand{display:flex;align-items:center;gap:10px;min-width:0;flex:1;background:none;border:none;padding:0;cursor:pointer;color:inherit}
-.wm{height:68px;width:auto;max-width:100%;display:block;object-fit:contain;object-position:left center}
+.wm{height:58px;width:auto;max-width:100%;display:block;object-fit:contain;object-position:left center}
 .wm-dark{display:none}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .wm-light{display:none}:root:not([data-theme="light"]) .wm-dark{display:block}}
 :root[data-theme="dark"] .wm-light{display:none}
@@ -727,7 +727,7 @@ const CONFIG = {
 
 const onAppHost = !CONFIG.appHosts || CONFIG.appHosts.some(h => h.startsWith(".") ? location.hostname.endsWith(h) : location.hostname === h);
 // Bump together with CACHE in sw.js whenever the app changes.
-const APP_VERSION = "6";
+const APP_VERSION = "7";
 const DEMO = !CONFIG.clientId || /[?&]demo\b/.test(location.search) || !onAppHost;
 const SCOPES = ["User.Read", "User.ReadBasic.All", "Sites.ReadWrite.All"];
 
