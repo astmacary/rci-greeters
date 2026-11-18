@@ -312,6 +312,7 @@ ol.steps li{padding-left:2px}
 .btn.accept{background:var(--go);border-color:var(--go);color:#FFFFFF}
 .btn.decline{background:var(--stop);border-color:var(--stop);color:#FFFFFF}
 .btn.decline-soft{color:var(--bad)}
+.rec-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;flex-wrap:wrap}.rec-pos{display:flex;flex-direction:column;gap:2px}.rec-warn{color:var(--bad);font-size:12px}.rec-row select{min-width:180px;max-width:100%}
 .btn.decline-outline{color:var(--bad);border-color:var(--bad)}
 /* Oct 26: tighter Serving Team spacing and compact list cards (text the size of the date, not bold) */
 .day-h:has(+ .team-h){margin-bottom:0 !important}
@@ -719,6 +720,8 @@ const CONFIG = {
   // Optional lists on the same site, looked up by name. If a list doesn't exist, that card simply stays empty.
   announcementsListName: "Announcements",
   messagesListName: "Birthday Messages",
+  recurringListName: "Recurring Schedule",          // Sunday line-ups by week of the month (admins edit in the app)
+  recurringAppliedListName: "Recurring Applied",   // one row per Sunday already filled from it
   announcementsListId: "",
   messagesListId: "",
   // Admins: only these sign-ins can edit Home-screen announcements and use Edit Schedule (My Profile → Admin).
@@ -729,7 +732,7 @@ const CONFIG = {
 
 const onAppHost = !CONFIG.appHosts || CONFIG.appHosts.some(h => h.startsWith(".") ? location.hostname.endsWith(h) : location.hostname === h);
 // Bump together with CACHE in sw.js whenever the app changes.
-const APP_VERSION = "12";
+const APP_VERSION = "13";
 const DEMO = !CONFIG.clientId || /[?&]demo\b/.test(location.search) || !onAppHost;
 const SCOPES = ["User.Read", "User.ReadBasic.All", "Sites.ReadWrite.All"];
 
@@ -1728,7 +1731,7 @@ function viewProfile(){
    Mirrors the SharePoint "Admin" view: Archive Status = Active, Service Date today or later, by date.
    Shows Service Date, Service Category and Security Name; admins change Placement. */
 function adminPanel(){
-  return isEditor() ? `<section class="panel install"><h2 class="section-label" style="margin:0">Admin</h2><p>Set placements on the upcoming Greeters schedule.</p><button class="btn blue" data-act="admin-open">${ICON.cal.replace("<svg",'<svg width="16" height="16"')}Edit Schedule</button></section>` : "";
+  return isEditor() ? `<section class="panel install"><h2 class="section-label" style="margin:0">Admin</h2><p>Set placements on the upcoming Greeters schedule.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn blue" data-act="admin-open">${ICON.cal.replace("<svg",'<svg width="16" height="16"')}Edit Schedule</button><button class="btn" data-act="rec-open">Recurring Schedule</button></div></section>` : "";
 }
 const adminRows = () => { const t = todayKey(); return S.items.filter(i => !isProfile(i) && i.date && i.date >= t && !i.archived); };
 function adminDates(){ return [...new Set(adminRows().map(i => i.date))].sort(); }
@@ -2133,7 +2136,7 @@ function render(){
     app.innerHTML = header + `<main><div class="wrap">${body}${ServeProfile.link()}</div></main>`;
     return;
   }
-  const views = { messages: () => Comm.view(), admin: viewAdmin, directory: viewDirectory, home: viewHome, schedule: viewSchedule, calendar: viewCalendar, team: viewTeam, member: viewMember, absence: viewAbsence, profile: viewProfile, install: viewInstall };
+  const views = { messages: () => Comm.view(), admin: viewAdmin, recurring: () => Recurring.view(), directory: viewDirectory, home: viewHome, schedule: viewSchedule, calendar: viewCalendar, team: viewTeam, member: viewMember, absence: viewAbsence, profile: viewProfile, install: viewInstall };
   if (!views[S.view]){ S.view = "home"; S.arg = null; }
   saveNav();
   const active = ["team","member","admin"].includes(S.view) ? (S.stack[0]?.view || "home") : S.view;
@@ -2203,6 +2206,9 @@ document.addEventListener("click", async e => {
   const act = b.dataset.act, item = S.items.find(i => i.id === b.dataset.id);
   switch(act){
     case "tab": S.scheduleDirty = false; S.annEdit = false; S.annEditId = null; S.stack = []; S.absenceDone = false; if (b.dataset.view === "calendar" && S.view !== "calendar"){ const t = new Date(); S.cal.month = new Date(t.getFullYear(), t.getMonth(), 1); S.cal.sel = todayKey(); } go(b.dataset.view, null, false); break;
+    case "rec-open": if (isEditor()){ go("recurring"); void Recurring.load().then(render); } break;
+    case "rec-week": S.recWeek = Number(b.dataset.week) || 1; render(); break;
+    case "rec-apply": if (isEditor()) void Recurring.apply(true); break;
     case "back": { if (ServeProfile.back()) break; const prev = S.stack.pop() || { view: "home" }; go(prev.view, prev.arg, false); break; }
     case "theme": toggleTheme(); break;
     case "np-open": if (isEditor()){ S.addPerson = true; render(); $("#np-name")?.focus(); } break;
@@ -2559,6 +2565,7 @@ document.addEventListener("input", e => {
   if (e.target.id === "cat-pick"){ const f = e.target.form, v = e.target.value.trim(); f.querySelector(".save-btn").disabled = !v || v === f.dataset.cur; return; } if (e.target.id === "ab-notes") absState().notes = e.target.value; });
 
 document.addEventListener("change", async e => {
+  if (e.target.matches?.("select[data-rec-slot]")){ await Recurring.set(Number(e.target.dataset.recWeek), Number(e.target.dataset.recSlot), e.target.value); return; }
   if (e.target.dataset.statusId){
     if (!isEditor()) return;
     const item = S.items.find(i => i.id === e.target.dataset.statusId), value = e.target.value;
@@ -3104,6 +3111,114 @@ const Onboarding = {
   }
 };
 
+/* ===== Recurring Schedule (admins) =====
+   One Sunday line-up per week of the month (1st–5th Sunday) for the six fixed greeter positions, kept in the
+   site's "Recurring Schedule" list (Week, Slot, Position, Full Name, Roster ID). When an admin opens the app,
+   Sundays in the next LOOKAHEAD days that have nothing on them yet are filled from it: each person gets a
+   Pending request (the "RCI Greeters - On Schedule Notifications" flow sends it). Each filled Sunday is written
+   to "Recurring Applied" so it is never refilled — later edits on that date (removing or swapping someone)
+   stick. People who are Non Active, archived, off the team or have Time Off that day are skipped and their
+   position stays open. */
+const Recurring = {
+  LOOKAHEAD: 28, listId: "", appliedId: "", rows: [], applied: new Set(), loaded: false, busy: false, error: "",
+  week: k => Math.ceil(fromKey(k).getDate() / 7),
+  ordinal: n => ["", "1st", "2nd", "3rd", "4th", "5th"][n] + " Sunday",
+  async load(){
+    if (DEMO || !isEditor() || !API.siteId) return;
+    try {
+      const base = `/sites/${API.siteId}/lists`;
+      if (!this.listId) this.listId = (await API.g(`${base}/${encodeURIComponent(CONFIG.recurringListName)}?$select=id`)).id;
+      if (!this.appliedId) this.appliedId = (await API.g(`${base}/${encodeURIComponent(CONFIG.recurringAppliedListName)}?$select=id`)).id;
+      const [rows, done] = await Promise.all([
+        API.all(`${base}/${this.listId}/items?$expand=fields($select=Week,Slot,Position,FullName,RosterId)&$top=500`),
+        API.all(`${base}/${this.appliedId}/items?$expand=fields($select=Title)&$top=999`)]);
+      this.rows = rows.map(r => ({ id: String(r.id), week: Number(r.fields.Week), slot: Number(r.fields.Slot), position: r.fields.Position || "", fullName: r.fields.FullName || "", rosterId: String(r.fields.RosterId || "") }));
+      this.applied = new Set(done.map(r => r.fields.Title).filter(Boolean));
+      this.loaded = true; this.error = "";
+    } catch(e){ this.error = `Couldn't open the Recurring Schedule list. ${e.message}`; console.warn(e); }
+  },
+  entry(week, slot){ return this.rows.find(r => r.week === week && r.slot === slot); },
+  person(r){ if (!r) return null; return S.items.find(p => isProfile(p) && String(p.id) === r.rosterId) || null; },
+  usable(p){ return !!p && !p.gone && !p.archived && !isNonActive(p) && directoryVisible(p); },
+  async set(week, slot, rosterId){
+    if (!isEditor() || !this.listId) return;
+    const cur = this.entry(week, slot), p = S.items.find(x => isProfile(x) && String(x.id) === String(rosterId));
+    const base = `/sites/${API.siteId}/lists/${this.listId}/items`;
+    try {
+      if (!rosterId){ if (cur){ await API.g(`${base}/${cur.id}`, { method: "DELETE" }); this.rows = this.rows.filter(r => r !== cur); } }
+      else {
+        const fields = { Title: `${this.ordinal(week)} · ${GREETER_POSITIONS[slot]}`, Week: week, Slot: slot, Position: GREETER_POSITIONS[slot], FullName: p?.fullName || "", RosterId: String(rosterId) };
+        if (cur){ await API.g(`${base}/${cur.id}/fields`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(fields) }); Object.assign(cur, { fullName: fields.FullName, rosterId: fields.RosterId }); }
+        else { const r = await API.g(base, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fields }) }); this.rows.push({ id: String(r.id), week, slot, position: fields.Position, fullName: fields.FullName, rosterId: fields.RosterId }); }
+      }
+      toast(`${this.ordinal(week)} · ${GREETER_POSITIONS[slot]}: ${p ? p.fullName : "Open"}`);
+    } catch(e){ toast("Couldn't save. " + e.message, true); }
+    render();
+  },
+  upcoming(){
+    const out = [], t = todayKey();
+    for (let n = 1; n <= this.LOOKAHEAD; n++){ const k = addDays(t, n); if (fromKey(k).getDay() === 0) out.push(k); }
+    return out;
+  },
+  async log(k){
+    await API.g(`/sites/${API.siteId}/lists/${this.appliedId}/items`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fields: { Title: k } }) });
+    this.applied.add(k);
+  },
+  /* Fill Sundays that have no rows yet. manual = an admin tapped "Fill upcoming Sundays now". */
+  async apply(manual){
+    if (DEMO || !isEditor() || !this.loaded || this.busy) return;
+    this.busy = true; if (manual) render();
+    let filled = 0, people = 0; const notes = [];
+    try {
+      for (const k of this.upcoming()){
+        if (this.applied.has(k)) continue;
+        const rows = S.items.filter(i => !isProfile(i) && i.date === k && !i.archived);
+        if (rows.length){ await this.log(k); continue; }            // already being scheduled by hand: leave it alone
+        const plan = this.rows.filter(r => r.week === this.week(k)).sort((a, b) => a.slot - b.slot);
+        if (!plan.length) continue;                                   // no line-up for this week yet: try again later
+        for (const r of plan){
+          const p = this.person(r), role = GREETER_POSITIONS[r.slot];
+          if (!this.usable(p)){ notes.push(`${fmtShort(k)} ${role}: ${r.fullName || "someone"} is no longer on the team`); continue; }
+          if (greeterUnavailable(p, k)){ notes.push(`${fmtShort(k)}: ${p.fullName} is off that day`); continue; }
+          try { await assignGreeter(k, role, p, "Pending"); people++; }
+          catch(e){ notes.push(`${fmtShort(k)} ${role}: ${e.message}`); }
+        }
+        await this.log(k); filled++;
+      }
+      if (filled) toast(`Recurring Schedule: filled ${filled} Sunday${filled === 1 ? "" : "s"} (${people} request${people === 1 ? "" : "s"} sent).${notes.length ? " Some positions were left open." : ""}`, !!notes.length);
+      else if (manual) toast("Upcoming Sundays already have a schedule (or no line-up is set for them).");
+      this.lastNotes = notes;
+    } catch(e){ toast("Recurring Schedule: " + e.message, true); }
+    this.busy = false; render(); updateBadge();
+  },
+  view(){
+    if (!isEditor()) return `${backBar("Recurring Schedule")}<div class="empty">Only schedule admins can manage the recurring schedule.</div>`;
+    if (this.error) return `${backBar("Recurring Schedule")}<div class="empty">${esc(this.error)}</div>`;
+    if (!this.loaded) return `${backBar("Recurring Schedule")}<div class="empty">Loading…</div>`;
+    const w = S.recWeek || 1;
+    const tabs = [1,2,3,4,5].map(n => `<button class="date-chip ${n === w ? "on" : ""}" data-act="rec-week" data-week="${n}" aria-pressed="${n === w}"><span>${["","1st","2nd","3rd","4th","5th"][n]}</span><b>${this.rows.filter(r => r.week === n).length}</b><span>Sunday</span></button>`).join("");
+    const people = rosterPeople().filter(p => this.usable(p)).sort((a, b) => (a.fullName || "").localeCompare(b.fullName || ""));
+    const next = this.upcoming().filter(k => this.week(k) === w);
+    const rowsHtml = GREETER_POSITIONS.map((role, slot) => {
+      const r = this.entry(w, slot), p = this.person(r), bad = r && !this.usable(p);
+      const taken = new Set(this.rows.filter(x => x.week === w && x.slot !== slot).map(x => x.rosterId));
+      const opts = people.filter(x => !taken.has(String(x.id)) || String(x.id) === r?.rosterId);
+      return `<div class="panel rec-row"><div class="rec-pos"><b>${esc(role)}</b>${bad ? `<span class="rec-warn">${esc(r.fullName || "This person")} is no longer on the team. Choose someone else.</span>` : ""}</div>
+        <select data-rec-week="${w}" data-rec-slot="${slot}" aria-label="${esc(role)} on the ${esc(this.ordinal(w))}">
+          <option value="">— Open —</option>${bad ? `<option value="${esc(r.rosterId)}" selected>${esc(r.fullName || "Removed")} (not on team)</option>` : ""}
+          ${opts.map(x => `<option value="${esc(x.id)}" ${String(x.id) === r?.rosterId ? "selected" : ""}>${esc(x.fullName)}</option>`).join("")}</select></div>`;
+    }).join("");
+    return `${backBar("Recurring Schedule")}
+      <p class="sub" style="margin-top:-12px">The line-up for each Sunday of the month. Upcoming Sundays (${this.LOOKAHEAD / 7} weeks ahead) are filled automatically and each greeter gets a request to accept or decline. A Sunday is only filled once, so changes you make in Edit Schedule for that date stay.</p>
+      <div class="date-chips" role="group" aria-label="Week of the month">${tabs}</div>
+      <h2 class="section-label">${esc(this.ordinal(w))}${next.length ? ` · next: ${next.map(k => `${esc(fmtShort(k))}${this.applied.has(k) ? " (filled)" : ""}`).join(", ")}` : ""}</h2>
+      <div class="list">${rowsHtml}</div>
+      <p class="hint">People who are Non Active, removed from the team, or have Time Off that Sunday are skipped and their position stays open. Changes here apply to Sundays that haven't been filled yet.</p>
+      <button class="btn blue" data-act="rec-apply" ${this.busy ? "disabled" : ""}>${this.busy ? "Filling…" : "Fill upcoming Sundays now"}</button>
+      ${this.lastNotes?.length ? `<div class="panel" style="margin-top:10px"><b>Left open last time</b><ul style="margin:6px 0 0 18px">${this.lastNotes.map(n => `<li>${esc(n)}</li>`).join("")}</ul></div>` : ""}`;
+  }
+};
+
 async function start(){
   S.phase = "boot"; render();
   try {
@@ -3123,6 +3238,7 @@ async function start(){
     void Onboarding.load(S.items).then(() => Onboarding.confirmSelf()).then(renderIdle);
     void loadAdmins(false).then(() => { if (ROSTER_ADD && !S.rosterRouteHandled && S.view === "directory" && isEditor()){ S.addPerson = true; S.rosterRouteHandled = true; } void syncSundayConfirmations().then(renderIdle); renderIdle(); });
     void Push.init();
+    void Recurring.load().then(() => Recurring.apply(false)).then(renderIdle);
   } catch(e){
     console.error(e); S.error = e.message || String(e); S.phase = "error"; render();
   }
